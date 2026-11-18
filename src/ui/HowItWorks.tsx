@@ -85,6 +85,8 @@ export function HowItWorks() {
         <li><b>Blue Owl example:</b> the escalator and NOI margin are not published. The value change for a 25bp move does not depend on the level of NOI, only its shape, so the escalator is the one at which all four published sensitivities are reproduced (2.4% to 2.5% at a 10-year hold), and the margin then matches the published value. The December 2025 portfolio, at that date's own regional rates, is a test the model was not fitted to: the total comes within 1.4%.</li>
       </ul>
 
+      <p><b>Public vs private:</b> the utility page sets the listed market's price for rate base (Fortis enterprise value at today's share price over its published 2025 mid-year rate base) against this model's value at a private target IRR, and shows the IRR a private buyer earns paying the listed multiple. The data centre page sets the portfolio's private value over next year's NOI against listed data centre owners' EV / EBITDA. Both are references, not like-for-like prices: listed companies carry growth, holding company debt and other businesses.</p>
+
       <h2>14. Equities: DCF from SEC filings</h2>
       <ul>
         <li><b>Data:</b> a script reads each company's annual 10-K, 20-F or 40-F figures from SEC EDGAR XBRL data, the latest close and five years of monthly prices from Yahoo Finance, and the 10-year risk-free rate (US Treasury, or Government of Canada for companies that report in Canadian dollars). Every reported figure links to the filing it came from. Companies whose XBRL data is stale or incomplete are left out rather than shown with gaps.</li>

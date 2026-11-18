@@ -1,6 +1,9 @@
 // Regulated utility page: same input panel, calibration table and Excel export as the project finance page,
 // with utility outputs (rate base, revenue requirement, earned ROE, equity value against a rate base multiple).
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { comp } from '../engine/comps.ts';
+import type { Company } from '../engine/dcf.ts';
+import { DATA } from './EquityPage.tsx';
 import { Model } from '../engine/sheet.ts';
 import { regulated } from '../engine/regulated.ts';
 import type { Module } from '../engine/projectFinance.ts';
@@ -136,6 +139,7 @@ export function UtilityPage({ mod }: { mod: Module }) {
           </div>
         </div>
 
+        <PublicPrivate m={scratch} v={values} evRb={s.ev_rb} />
         <CasesPanel id={mod.id} m={scratch} values={values} defaults={defaults} setValues={setValues} metrics={[
           ['Equity value at target IRR (C$m)', x => fmt(x.scalar.eq_value)], ['Implied EV / rate base', x => fmt(x.scalar.ev_rb, 'x')], ['Implied P / E', x => fmt(x.scalar.pe, 'x')],
           ['IRR at entry multiple', x => fmt(x.scalar.equity_irr, 'pct')], ['Average earned ROE', x => fmt(x.scalar.avg_roe, 'pct')], ['Rate base growth', x => fmt(x.scalar.rb_cagr, 'pct')],
@@ -187,6 +191,37 @@ export function UtilityPage({ mod }: { mod: Module }) {
           </table></div>
         </div>
       </section>
+    </div>
+  );
+}
+
+// Public vs private: what the listed market pays for regulated rate base (Fortis) against this model's private value,
+// and the IRR a private buyer would earn paying the listed multiple.
+const FTS_RB = 41900; // C$m, Fortis 2025 mid-year rate base (Q3 2025 release, 6-K Exhibit 99.1)
+function PublicPrivate({ m, v, evRb }: { m: Model; v: V; evRb: number }) {
+  const [fts, setFts] = useState<Company | null>();
+  useEffect(() => { fetch(`${DATA}FTS.json`).then(r => (r.ok ? r.json() : null)).then(setFts, () => setFts(null)); }, []);
+  const c = fts ? comp(fts) : undefined;
+  const mult = c ? c.ev / FTS_RB : undefined;
+  const irr = useMemo(() => {
+    if (mult === undefined) return undefined;
+    m.set({ ...v, entry_mult: mult }); const a = m.results().scalar.equity_irr;
+    m.set({ ...v, entry_mult: mult, exit_mult: mult }); const b = m.results().scalar.equity_irr;
+    m.set(v);
+    return { a, b };
+  }, [m, v, mult]);
+  return (
+    <div className="card">
+      <h2>Public vs private: rate base multiples</h2>
+      {fts === null ? <p className="note">Fortis market data could not be loaded.</p> : !c || !irr || mult === undefined ? <p className="note">Loading Fortis market data...</p> : (
+        <div className="scroll-x"><table><tbody>
+          <tr><td>Fortis (listed): enterprise value / 2025 mid-year rate base</td><td>{fmt(mult, 'x')}</td></tr>
+          <tr><td>This utility at a private target IRR of {fmt(v.target_irr, 'pct')}: enterprise value / rate base</td><td>{fmt(evRb, 'x')}</td></tr>
+          <tr><td>Equity IRR paying Fortis's multiple, exit at {fmt(v.exit_mult, 'x')}</td><td>{fmt(irr.a, 'pct')}</td></tr>
+          <tr><td>Equity IRR paying Fortis's multiple, exit at the same multiple</td><td>{fmt(irr.b, 'pct')}</td></tr>
+        </tbody></table></div>
+      )}
+      <p className="note">Fortis enterprise value is today's share price times shares plus debt, preferred shares and non-controlling interests less cash, from its latest annual SEC filing (C${c ? fmt(c.ev) : '...'}m), over its 2025 mid-year rate base of C$41.9bn (Q3 2025 results release). The listed multiple carries Fortis's own growth (rate base 6.7% a year to 2030), its holding company debt and a small non-regulated business, so it is a market reference, not a like-for-like price.</p>
     </div>
   );
 }

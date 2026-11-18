@@ -1,5 +1,8 @@
 // Data centre page: lease DCF (Engine D) with the shared input panel, calibration table, cases, memo and Excel export.
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { comp, median, type Comp } from '../engine/comps.ts';
+import type { Company } from '../engine/dcf.ts';
+import { DATA } from './EquityPage.tsx';
 import { Model } from '../engine/sheet.ts';
 import { lease } from '../engine/lease.ts';
 import type { Module } from '../engine/projectFinance.ts';
@@ -104,6 +107,7 @@ export function DigitalPage({ mod }: { mod: Module }) {
           </div>
         </div>
 
+        <PublicPrivate value={s.value} noi1={r.noi[1]} />
         <CasesPanel id={mod.id} m={scratch} values={values} defaults={defaults} setValues={setValues} metrics={[
           ['Portfolio value (US$m)', x => fmt(x.scalar.value)], ['Going-in yield', x => fmt(x.scalar.going_in, 'pct')], ['Value per MW (US$m)', x => fmt(x.scalar.per_mw)],
           ['Exit value share', x => fmt(x.scalar.tv_share, 'pct')], ['IRR at the price', x => fmt(x.scalar.irr, 'pct')],
@@ -144,6 +148,34 @@ export function DigitalPage({ mod }: { mod: Module }) {
           </table></div>
         </div>
       </section>
+    </div>
+  );
+}
+
+// Public vs private: listed data centre owners' trading multiples against this portfolio's private value.
+const LISTED = ['DLR', 'EQIX'];
+function PublicPrivate({ value, noi1 }: { value: number; noi1: number }) {
+  const [peers, setPeers] = useState<Comp[] | null>();
+  useEffect(() => {
+    Promise.all(LISTED.map(t => fetch(`${DATA}${t}.json`).then(r => (r.ok ? r.json() : null)).catch(() => null)))
+      .then((cs: (Company | null)[]) => setPeers(cs.flatMap(c => { const x = c && comp(c); return x ? [x] : []; })));
+  }, []);
+  const med = peers ? median(peers.map(p => p.evEbitda)) : undefined;
+  const priv = value / noi1;
+  return (
+    <div className="card">
+      <h2>Public vs private: data centre multiples</h2>
+      {peers === undefined ? <p className="note">Loading listed peers...</p> : (
+        <div className="scroll-x"><table>
+          <thead><tr><th>Owner</th><th>Multiple</th><th>Yield (1 / multiple)</th></tr></thead>
+          <tbody>
+            <tr><td>This portfolio, private value / year 1 NOI</td><td>{fmt(priv, 'x')}</td><td>{fmt(1 / priv, 'pct')}</td></tr>
+            {peers!.map(p => <tr key={p.ticker}><td><a href={`#/equity/${p.ticker}`}>{p.ticker}</a>, listed EV / trailing EBITDA (FY {p.fy.slice(0, 4)})</td><td>{p.evEbitda ? fmt(p.evEbitda, 'x') : 'n/a'}</td><td>{p.evEbitda ? fmt(1 / p.evEbitda, 'pct') : 'n/a'}</td></tr>)}
+            {med !== undefined && <tr><td>Listed median</td><td>{fmt(med, 'x')}</td><td>{fmt(1 / med, 'pct')}</td></tr>}
+          </tbody>
+        </table></div>
+      )}
+      <p className="note">Listed figures from each company's latest annual SEC filing and closing price, with the same enterprise value bridge as the equity pages. The comparison is indicative: the listed multiple is on trailing EBITDA after corporate costs and includes development pipelines, interconnection and global platforms; the private multiple is on next year's property NOI for stabilized, leased capacity.</p>
     </div>
   );
 }
