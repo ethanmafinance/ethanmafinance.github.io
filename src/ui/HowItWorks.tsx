@@ -1,0 +1,94 @@
+export function HowItWorks() {
+  return (
+    <article className="prose">
+      <h1>How the project finance model works</h1>
+      <p className="lede">The site and the Excel download run the same formulas. The page builds a spreadsheet in your browser, calculates it, and shows the results; the download writes that spreadsheet out with every formula live.</p>
+
+      <h2>1. Timeline</h2>
+      <p>Annual periods. Year 1 is the financial close year. Construction runs for the set number of years, then operations run until the concession or asset life ends. All costs are entered in start-year dollars and grown by inflation, except where a contract fixes them in nominal terms.</p>
+
+      <h2>2. Construction funding</h2>
+      <p>Capex is spent on the profile you set. Development, financing and other project costs are spent at financial close. Each year's spend is funded pro rata by three sources: a facility repaid by the public sponsor's completion payment, long-term senior debt, and equity. Interest on the debt during construction is added to the balance (capitalized), so the debt at commercial operation (COD) equals the debt share of capex compounded at the debt rate.</p>
+
+      <p><b>Equity timing:</b> many Canadian P3 sponsors do not pay equity in during construction. A bridge loan, backed by a letter of credit, funds equity's share and is repaid by the equity at COD. With equity timing set to 1, equity pays its share of costs compounded to COD at the debt rate in one amount at COD, and the bridge interest is added to sources and uses. The present value at the debt rate is unchanged (tested), but the equity IRR rises because cash goes in later: Humber River moves from 7.2% to 7.5%. Debt sizing does not change.</p>
+
+      <h2>3. Sizing the debt</h2>
+      <p>CFADS (cash flow available for debt service) is EBITDA less maintenance capex and tax. Lenders allow debt service of CFADS divided by the target DSCR in each year of the tenor, so the debt amortizes in line with cash flow (sculpting). The most debt the project can carry is the balance that this debt service repays exactly by the end of the tenor. The model takes the lower of that and the gearing cap, then scales the payments so the debt still repays exactly.</p>
+      <p>Tax deducts interest, interest depends on the debt balance, and the balance depends on later debt service. Most models solve this circular reference with a macro. This model solves it backward from the last year of the tenor in closed form: each year's opening balance equals the closing balance plus that year's debt service, discounted one year, with tax on EBITDA less CCA less interest. No macro and no iteration, and the Excel file recalculates on its own. Tax losses are ignored when sizing, so actual coverage is at or above the target.</p>
+
+      <h2>4. Tax</h2>
+      <p>Canadian capital cost allowance on a declining balance with the half-year rule, at the class rate you set. Tax losses carry forward. Interest during construction is left out of the tax base, which is conservative.</p>
+
+      <h2>5. Reserves and distributions</h2>
+      <p>The debt service reserve account holds the set number of months of next year's debt service, funded by equity at COD and released at the end. If DSCR falls below the lock-up level, distributions stop and cash is trapped until the test passes again.</p>
+
+      <h2>6. Returns</h2>
+      <ul>
+        <li><b>Equity IRR:</b> IRR of equity contributions during construction and distributions after.</li>
+        <li><b>Project IRR:</b> IRR of capex against unlevered after-tax cash flow, before any financing.</li>
+        <li><b>MOIC, cash yield, payback:</b> total distributions over equity invested; each year's distribution over equity invested; the first year cumulative equity cash flow turns positive.</li>
+        <li><b>DSCR and LLCR:</b> CFADS over debt service each year; present value of CFADS over the tenor divided by debt at COD.</li>
+      </ul>
+
+      <h2>7. Downside cases and breakevens</h2>
+      <p>The model keeps two cases. The base case sizes the debt. The downside inputs (revenue, operating costs, lifecycle costs, actual inflation) change only the actual cash flows, so debt service stays as fixed at financial close, the way lenders and rating agencies test a closed deal. A breakeven is the uniform change that takes the minimum DSCR to 1.00x or to the lock-up level. The interest rate case is different: rates move before close, so the debt is re-sized.</p>
+      <p><b>Refinancing risk:</b> many deals use debt that legally matures before it is fully repaid (a mini-perm). Set a legal maturity shorter than the tenor and the balance left at that date (the balloon) is refinanced as a level-payment loan over the rest of the tenor at the original rate plus the refinancing spread. Debt is still sized at close on the original terms, so a higher spread only lowers coverage and returns after maturity. The balloon is carried forward one year at a time, so the Excel file has no circular reference.</p>
+
+      <h2>8. Pension lens</h2>
+      <ul>
+        <li><b>Real equity IRR:</b> (1 + nominal IRR) / (1 + CPI) - 1.</li>
+        <li><b>Spread over real return bonds:</b> real IRR less today's Government of Canada real return bond yield from the Bank of Canada.</li>
+        <li><b>Inflation pass-through:</b> the change in nominal equity IRR when actual inflation runs 1pt above the base case. 100% means returns are fully protected in real terms; 0% means a nominal return.</li>
+        <li><b>Duration:</b> Macaulay duration of distributions from COD, discounted at the equity IRR.</li>
+      </ul>
+
+      <h2>9. Equity value and bid</h2>
+      <p>Secondary purchase: the value of 100% of the equity at the end of a chosen year is the present value of the remaining distributions at the buyer's target IRR; entering a price solves the buyer's IRR. Bid solver: bidders compete on the payment they ask for (the availability payment for a P3, the contract price for a power project), so the solver finds the payment that gives a target equity IRR, re-sizing the debt at each step as lenders would at bid.</p>
+
+      <p><b>Investment committee memo:</b> every model page (project finance, regulated utility and equity DCF) can print a one-page memo (Print, then Save as PDF) with the summary, returns and coverage, sources and uses, the four largest sensitivities, the downside breakevens and the calibration result, all from the inputs as they stand. A thesis typed on the page prints at the top.</p>
+
+      <h2>10. Renewables: two output cases, level payments, tax pool</h2>
+      <ul>
+        <li><b>Output cases:</b> lenders size debt on a conservative output case, usually the one-year P90 (output exceeded in 9 years out of 10) less a haircut. Equity reads returns on P50, the expected output. The model sizes the debt on the sizing case, then runs actual cash flow, DSCR and returns on P50. The KPI tile shows both minimum DSCRs.</li>
+        <li><b>Revenue:</b> output (GWh) times realized price (C$/MWh). An Ontario FIT price is indexed to part of CPI: price x (1 + share x (CPI index - 1)), so 20% indexation adds a fifth of cumulative inflation. After the contract the asset sells at the merchant price.</li>
+        <li><b>Level payments:</b> some bonds repay with equal payments instead of a sculpted profile. Debt D pays D x the annuity factor every year. Because the balance per dollar of debt is known in advance, each year's coverage test CFADS &gt;= DSCR x payment gives a cap on D in closed form; the debt is the lowest cap. Coverage is then at the target in the tightest year and higher elsewhere.</li>
+        <li><b>Tax pool:</b> for an operating asset, part of the cost may already be deducted. The tax pool input sets how much of the cost is still available for CCA at the start, which matters when you buy or refinance a built asset.</li>
+      </ul>
+
+      <h2>11. Toll roads and bridges: traffic, tolls, growing debt service</h2>
+      <ul>
+        <li><b>Revenue:</b> traffic times the average toll. Traffic ramps up from a share of its mature level over the ramp-up years, then grows at a set rate. Tolls rise each year by a share of CPI: toll x (CPI index)^share. Canadian concessions often cap increases below CPI; the Confederation Bridge cap is 75% of CPI.</li>
+        <li><b>Lender case:</b> lenders size debt on traffic below the sponsor's forecast (the haircut). Debt is sized on the haircut case; actual DSCR and returns use the sponsor case.</li>
+        <li><b>Growing debt service:</b> some bonds repay on a fixed schedule that rises each year (accretive amortization). Debt D pays D x a x (1 + g)^(t - 1), where a = (r - g) / (1 - ((1 + g) / (1 + r))^n) is the growing annuity factor, so the payments repay D exactly over n years at rate r. Sizing works as for level payments: each year's coverage test gives a cap on D and the debt is the lowest cap. Level payments are the case g = 0.</li>
+        <li><b>Operating asset with no public price:</b> when the price paid for the equity is not public, the page shows what the equity is worth at a buyer's target IRR (present value of distributions after the start date) in place of an IRR, and the downside table shows equity value at 8%.</li>
+      </ul>
+
+      <h2>12. Regulated utilities: rate base and revenue requirement</h2>
+      <ul>
+        <li><b>Rate base:</b> net fixed assets roll forward each year (opening plus in-service additions less depreciation). Rate base is the average of opening and closing net fixed assets plus a working capital allowance, as the Ontario Energy Board sets it.</li>
+        <li><b>Revenue requirement:</b> OM&amp;A plus depreciation plus deemed interest plus return on equity plus PILs (tax). The return uses a deemed capital structure (in Ontario 40% equity, 56% long-term debt, 4% short-term debt): return on equity = rate base x 40% x allowed ROE; deemed interest = rate base x (56% x long-term rate + 4% x short-term rate). Other revenue offsets the requirement, and the rest is recovered in distribution rates.</li>
+        <li><b>Incentive rate-setting:</b> between rebasings, revenue grows by an index less a stretch factor, so revenue falls a little further below cost each year. The model reduces revenue by the stretch rate times the years since the last rebasing and resets every five years. Unless the utility finds savings to match, the shortfall comes out of earnings after tax.</li>
+        <li><b>Earnings and cash to equity:</b> net income is the allowed return less any unrecovered stretch. To keep the deemed structure, equity funds 40% of rate base growth, so free cash flow to equity = net income less 40% of the change in year-end rate base. Fast-growing utilities pay out less cash even when earnings rise.</li>
+        <li><b>Valuation:</b> equity value is free cash flow to equity plus an exit value (exit multiple x rate base, less deemed debt), discounted at the buyer's target IRR. Bought and sold at 1.0x rate base with no growth, the IRR equals the allowed ROE (tested). A premium to rate base needs growth or a matching exit premium to earn it back.</li>
+        <li><b>After the plan:</b> additions grow at a set rate, depreciation keeps the last plan year's rate, and PILs keep the plan's ratio to the return on equity.</li>
+      </ul>
+
+      <h2>13. Equities: DCF from SEC filings</h2>
+      <ul>
+        <li><b>Data:</b> a script reads each company's annual 10-K, 20-F or 40-F figures from SEC EDGAR XBRL data, the latest close and five years of monthly prices from Yahoo Finance, and the 10-year risk-free rate (US Treasury, or Government of Canada for companies that report in Canadian dollars). Every reported figure links to the filing it came from. Companies whose XBRL data is stale or incomplete are left out rather than shown with gaps.</li>
+        <li><b>Free cash flow:</b> unlevered free cash flow = NOPAT + D&amp;A - capex, where NOPAT = EBIT x (1 - tax). The last three fiscal years are shown as reported.</li>
+        <li><b>Forecast:</b> revenue growth starts at the three-year CAGR and fades in a straight line to terminal growth. The EBIT margin fades from the last reported year to the three-year average. Capex is D&amp;A plus net reinvestment, where the reinvestment rate (net reinvestment / NOPAT) fades from its three-year history to g / RONIC. That makes the last forecast year consistent with the terminal value.</li>
+        <li><b>Terminal value:</b> value driver formula, TV = NOPAT next year x (1 - g / RONIC) / (WACC - g). With RONIC equal to WACC, growth adds no value and TV = NOPAT / WACC (tested: in a steady state the model reproduces FCF / (WACC - g) exactly). The alternative is an exit EV / EBITDA multiple, starting at today's trading multiple.</li>
+        <li><b>Discount rate:</b> cost of equity = risk-free rate + beta x equity risk premium (Damodaran's implied premium). Beta is a 60-month regression on the S&amp;P 500 or S&amp;P/TSX Composite, Blume-adjusted (0.67 x raw + 0.33). Cost of debt is interest / debt. Weights use market equity and book debt.</li>
+        <li><b>Timing:</b> cash flows are discounted from the price date. The part of the current fiscal year already passed is excluded, and the mid-year convention is on by default.</li>
+        <li><b>Equity value:</b> enterprise value less debt, plus cash, less non-controlling interests and preferred shares at book value, divided by shares outstanding from the latest cover page.</li>
+        <li><b>Company plans:</b> the hold input keeps year 1 growth, margin and reinvestment flat for a set number of years before the fade starts, so a five-year capital plan can run as guided. The worked Fortis example sets growth to its rate base growth (mid-year rate base C$41.9bn in 2025 to C$57.9bn in 2030, 6.7% a year), solves the reinvestment rate so 2026 to 2030 capex sums to the C$28.8bn plan, and sets the return on new capital to FY2025 NOPAT over rate base (6.9%), since regulated capital earns its allowed return. Reported revenue, EBIT and D&amp;A are checked against the MD&amp;A in the 40-F.</li>
+        <li><b>Reverse DCF:</b> the page solves the year 1 growth rate that makes value per share equal the current price, holding every other assumption. It shows what the market expects, without arguing over a target price.</li>
+        <li><b>Limits:</b> no analyst consensus, working capital and leases are not modelled separately, and banks and insurers are excluded because an unlevered DCF does not fit them.</li>
+      </ul>
+
+      <h2>14. Sources</h2>
+      <p>Every default carries a citation. Values tagged <b>est.</b> are not published; the note beside each one shows how it was set. The "published vs model" table compares the output with figures from public filings and rating reports.</p>
+    </article>
+  );
+}

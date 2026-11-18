@@ -1,0 +1,27 @@
+# Daily refresh of the equity data (SEC filings, prices, risk-free rates) and deploy to GitHub Pages.
+# Free on public repositories. Data files are rebuilt here, so the committed copies are only a fallback.
+name: Build and deploy
+on:
+  push: { branches: [main] }
+  schedule: [{ cron: '30 22 * * 1-5' }] # 22:30 UTC on weekdays, after the US and TSX close
+  workflow_dispatch:
+permissions: { contents: read, pages: write, id-token: write }
+concurrency: { group: pages, cancel-in-progress: true }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: { name: github-pages, url: '${{ steps.deployment.outputs.page_url }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm test
+      # Keeps the committed data if a source is down, so a failed refresh never empties the site.
+      - run: node scripts/equities.mjs || echo "equity refresh failed; using committed data"
+        env: { SEC_UA: '${{ vars.SEC_UA }}' }
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: dist }
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,227 @@
+// Engine C: listed company DCF built from SEC filings (scripts/equities.mjs writes the company file).
+// Unlevered free cash flow = EBIT x (1 - tax) - net reinvestment, where net reinvestment = capex - D&A.
+// Over the forecast, revenue growth fades in a straight line from year 1 to the terminal rate, the EBIT
+// margin fades from the last reported year to a target, and the reinvestment rate (net reinvestment / NOPAT)
+// fades from its 3-year history to the steady state g / RONIC, so the last forecast year is consistent with
+// the terminal value (value driver formula, McKinsey "Valuation"; Damodaran):
+//   TV = NOPAT(N+1) x (1 - g / RONIC) / (WACC - g)
+// Columns 0..2 are the last three fiscal years as reported; columns 3.. are the forecast.
+import type { Input, Item, ModelDef, Source } from './sheet.ts';
+
+type Fact = { v: number; concept: string; form: string; filed?: string; url: string } | null;
+export type Company = {
+  ticker: string; name: string; cik: number; currency: 'USD' | 'CAD'; fyEnds: string[];
+  hist: Record<'rev' | 'ebit' | 'da' | 'capex' | 'cfo' | 'pretax' | 'tax' | 'ni' | 'int', Fact[]>;
+  bal: Record<'cash' | 'debt_total' | 'ltd' | 'ltd_cur' | 'std' | 'nci' | 'pref', Fact>;
+  shares: { v: number; asOf: string; concept: string; form: string; url: string };
+  price: { v: number; date: string; symbol: string; exchange: string };
+  beta: { value: number; months: number; index: string; from: string; to: string };
+  rf: { value: number; date: string; title: string; url: string };
+  generated: string;
+};
+export type Answers = { years: number; scenario: 'base' | 'downside' | 'upside'; wacc: 'capm' | 'direct'; terminal: 'growth' | 'multiple' };
+
+export const HIST = 3;
+const STATUTORY = { USD: 0.21, CAD: 0.265 };
+// Scenario shifts (illustrative, est.): year 1 growth and target margin move together.
+export const SCENARIO = { base: [0, 1], downside: [-0.03, 0.9], upside: [0.03, 1.1] } as const;
+
+const ERP: Source = { title: 'Damodaran, implied equity risk premium (FCFE) for the S&P 500, start of 2026', date: 'Jan 7, 2026', url: 'https://pages.stern.nyu.edu/~adamodar/pc/datasets/histimpl.xls' };
+const TARGET2: Source = { title: 'Bank of Canada and US Federal Reserve inflation targets, 2%', url: 'https://www.bankofcanada.ca/rates/indicators/key-variables/inflation-control-target/' };
+const VALUATION: Source = { title: 'Koller, Goedhart and Wessels, Valuation (McKinsey), value driver formula; Damodaran, Investment Valuation', note: '' };
+const STAT: Record<string, Source> = {
+  USD: { title: 'US federal corporate tax rate 21% (IRC section 11)', url: 'https://www.irs.gov/businesses/small-businesses-self-employed/corporate-tax-rates' },
+  CAD: { title: 'Canada Revenue Agency, federal 15% plus Ontario 11.5%', url: 'https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/corporations/corporation-tax-rates.html' },
+};
+
+const est = (note: string, base?: Source): Source => ({ ...(base ?? { title: '' }), est: true, note });
+const factSrc = (f: Fact, what: string): Source | undefined =>
+  f ? { title: `SEC ${f.form}${f.filed ? ` filed ${f.filed}` : ''}`, note: `${what}, XBRL ${f.concept}`, url: f.url } : undefined;
+const avg = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length;
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+// Sum of the debt components the filing tags. Total if tagged; otherwise non-current + current portion; plus short-term borrowings.
+export function debtOf(c: Company) {
+  const b = c.bal;
+  const parts = b.debt_total ? [b.debt_total] : [b.ltd, b.ltd_cur].filter(Boolean);
+  if (b.std) parts.push(b.std);
+  return { v: parts.reduce((s, f) => s + f!.v, 0), parts: parts as NonNullable<Fact>[] };
+}
+
+export type Overrides = Record<string, { value: number; source?: Source }>;
+
+export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelDef; missing: string[] } {
+  const H = c.fyEnds.length >= HIST ? HIST : c.fyEnds.length;
+  const last = c.fyEnds.slice(-H);
+  const fy = last.map(e => +e.slice(0, 4));
+  const missing: string[] = [];
+  const histVal = (k: keyof Company['hist'], label: string) => {
+    const facts = c.hist[k].slice(-H);
+    if (facts.some(f => !f)) missing.push(label);
+    return facts;
+  };
+  const rev = histVal('rev', 'Revenue'), ebit = histVal('ebit', 'Operating income (EBIT)'), da = histVal('da', 'Depreciation and amortization'), capex = histVal('capex', 'Capital expenditures');
+  const v = (f: Fact) => f?.v ?? 0;
+
+  // Defaults computed from the filings (shown as est. with the method).
+  const r = rev.map(v), e = ebit.map(v), d = da.map(v), x = capex.map(v);
+  const taxes = c.hist.tax.slice(-H).map(v), pre = c.hist.pretax.slice(-H).map(v);
+  const effTax = avg(pre) > 0 ? avg(taxes) / avg(pre) : NaN;
+  const useEff = effTax >= 0.05 && effTax <= 0.4;
+  const tax = useEff ? effTax : STATUTORY[c.currency];
+  const cagr = (r[H - 1] / r[0]) ** (1 / (H - 1)) - 1;
+  const [dg, mm] = SCENARIO[a.scenario];
+  const g1 = clamp(cagr, -0.05, 0.25) + dg;
+  const margins = e.map((m, k) => m / r[k]);
+  const nopat = e.map(m => m * (1 - tax));
+  const capexOk = capex.every(Boolean);
+  const reinv = clamp(avg(x.map((cx, k) => cx - d[k])) / avg(nopat), -0.5, 2);
+  const debt = debtOf(c);
+  const int = c.hist.int.slice(-1)[0];
+  const kd = int && debt.v > 0 ? clamp(int.v / debt.v, c.rf.value, c.rf.value + 0.05) : c.rf.value + 0.015;
+  const fyEnd = c.fyEnds.at(-1)!;
+  const stub = clamp((Date.parse(c.price.date) - Date.parse(fyEnd)) / (365.25 * 864e5), 0, 0.99);
+  const ebitda = e[H - 1] + d[H - 1];
+  const evNow = c.price.v * c.shares.v + debt.v - v(c.bal.cash) + v(c.bal.nci) + v(c.bal.pref);
+  const cur = c.currency === 'CAD' ? 'C$m' : 'US$m';
+  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+
+  const g = (group: string, list: Omit<Input, 'group'>[]): Input[] => list.map(i => ({ ...i, group }));
+  const histInputs = (id: string, label: string, facts: Fact[]) =>
+    facts.map((f, k) => ({ id: `${id}_h${k + 1}`, label: `${label}, FY${fy[k]}`, unit: cur, value: v(f), fmt: 'num' as const,
+      source: factSrc(f, label) ?? est('not tagged in the XBRL data; enter it from the annual report') }));
+
+  const inputs: Input[] = [
+    ...g('Timing', [
+      { id: 'years', label: 'Forecast years', unit: 'years', value: a.years, fmt: 'int', timing: true, min: 3, max: 15, step: 1,
+        source: est('chosen when the model was built') },
+      { id: 'hold', label: 'Forecast years held at the year 1 growth, margin and reinvestment before the fade', unit: 'years', value: 0, fmt: 'int', min: 0, max: 14, step: 1,
+        source: est('0 or 1 = fade from year 1. Set to the length of a company plan (e.g. 5) to run its guidance before fading') },
+      { id: 'stub', label: 'Share of the current fiscal year already passed at the price date', unit: 'years', value: +stub.toFixed(3), fmt: 'num',
+        source: est(`from the fiscal year end (${fyEnd}) to the price date (${c.price.date}); that part of year 1 cash flow is excluded`) },
+      { id: 'mid', label: 'Mid-year discounting (1 = yes, 0 = year end)', unit: 'flag', value: 1, fmt: 'flag', min: 0, max: 1, step: 1,
+        source: est('cash arrives through the year, so the usual convention discounts it from mid-year') },
+    ]),
+    ...g('Reported financials', [
+      ...histInputs('rev', 'Revenue', rev),
+      ...histInputs('ebit', 'Operating income (EBIT)', ebit),
+      ...histInputs('da', 'Depreciation and amortization', da),
+      ...histInputs('capex', 'Capital expenditures', capex),
+    ]),
+    ...g('Forecast', [
+      { id: 'g1', label: 'Revenue growth, forecast year 1', unit: '%', value: +g1.toFixed(4), fmt: 'pct',
+        source: est(`FY${fy[0]} to FY${fy[H - 1]} revenue CAGR of ${pct(cagr)}${dg ? `, ${dg > 0 ? '+' : ''}${dg * 100}pt for the ${a.scenario} case` : ''}. No analyst consensus is used`) },
+      { id: 'g_term', label: 'Terminal growth (revenue growth fades to this by the last forecast year)', unit: '%', value: 0.02, fmt: 'pct',
+        source: est('long-run nominal growth at the 2% inflation target, no real growth', TARGET2) },
+      { id: 'm1', label: 'EBIT margin, forecast year 1', unit: '%', value: +margins[H - 1].toFixed(4), fmt: 'pct',
+        source: est(`FY${fy[H - 1]} reported EBIT margin`) },
+      { id: 'm_target', label: 'EBIT margin, last forecast year (target)', unit: '%', value: +(avg(margins) * mm).toFixed(4), fmt: 'pct',
+        source: est(`${H}-year average reported margin of ${pct(avg(margins))}${mm !== 1 ? `, x${mm} for the ${a.scenario} case` : ''}`) },
+      { id: 'da_pct', label: 'Depreciation and amortization', unit: '% of revenue', value: +(avg(d) / avg(r)).toFixed(4), fmt: 'pct',
+        source: est(`${H}-year reported average`) },
+      { id: 'reinv1', label: 'Reinvestment rate, forecast year 1: (capex - D&A) / NOPAT', unit: '%', value: capexOk ? +reinv.toFixed(4) : +(0.02 / 0.08).toFixed(4), fmt: 'pct',
+        source: capexOk ? est(`${H}-year reported average`) : est('capex is not tagged, so this starts at the steady state (2% growth / 8% return on new capital); enter reported capex and set this from it') },
+      { id: 'ronic', label: 'Return on new invested capital in the terminal period (RONIC)', unit: '%', value: 0, fmt: 'pct',
+        source: est('0 = equal to WACC: new investment earns its cost of capital in perpetuity, so growth adds no value (the standard neutral assumption)', VALUATION) },
+      { id: 'tax', label: 'Tax rate on operating income', unit: '%', value: +tax.toFixed(4), fmt: 'pct',
+        source: useEff ? est(`${H}-year effective rate: income tax / pre-tax income from the filings`) : est(`statutory rate: the ${H}-year effective rate (${Number.isFinite(effTax) ? pct(effTax) : 'n/a'}) is outside 5% to 40%`, STAT[c.currency]) },
+    ]),
+    ...g('Discount rate (WACC)', [
+      { id: 'wacc_mode', label: 'WACC method (0 = CAPM build-up below, 1 = enter WACC directly)', unit: 'flag', value: a.wacc === 'direct' ? 1 : 0, fmt: 'flag', min: 0, max: 1, step: 1, source: est('chosen when the model was built') },
+      { id: 'wacc_in', label: 'WACC entered directly', unit: '%', value: 0.08, fmt: 'pct', source: est('used only when the method is 1') },
+      { id: 'rf', label: `Risk-free rate (${c.currency === 'CAD' ? 'Government of Canada' : 'US Treasury'} 10-year)`, unit: '%', value: c.rf.value, fmt: 'pct', source: { title: c.rf.title, date: c.rf.date, url: c.rf.url } },
+      { id: 'beta', label: 'Equity beta (adjusted)', unit: 'x', value: +(0.67 * c.beta.value + 0.33).toFixed(3), fmt: 'x',
+        source: est(`Blume adjustment 0.67 x raw + 0.33 (betas drift toward 1; the convention behind Bloomberg's adjusted beta). Raw beta ${c.beta.value.toFixed(2)}: regression of ${c.beta.months} monthly total returns, ${c.beta.from} to ${c.beta.to}, on the ${c.beta.index === '^GSPTSE' ? 'S&P/TSX Composite' : 'S&P 500'} (Yahoo Finance adjusted closes)`) },
+      { id: 'erp', label: 'Equity risk premium', unit: '%', value: 0.0423, fmt: 'pct', source: ERP },
+      { id: 'kd', label: 'Pre-tax cost of debt', unit: '%', value: +kd.toFixed(4), fmt: 'pct',
+        source: int && debt.v > 0 ? est(`FY${fy[H - 1]} interest (${int.concept.split(':')[1]}) / year-end debt, held between the risk-free rate and 5pt above it`) : est('risk-free rate plus 1.5pt: interest expense is not tagged') },
+    ]),
+    ...g('Equity bridge', [
+      { id: 'debt', label: 'Total debt at the last fiscal year end', unit: cur, value: +debt.v.toFixed(3), fmt: 'num',
+        source: debt.parts.length ? { title: `SEC ${debt.parts[0].form}`, note: 'sum of ' + debt.parts.map(p => `${p.concept.split(':')[1]} ${p.v.toFixed(1)}`).join(' + '), url: debt.parts[0].url } : est('debt is not tagged in the XBRL data; enter it from the balance sheet') },
+      { id: 'cash', label: 'Cash and cash equivalents', unit: cur, value: v(c.bal.cash), fmt: 'num', source: factSrc(c.bal.cash, 'Cash') ?? est('not tagged') },
+      { id: 'nci', label: 'Non-controlling interests', unit: cur, value: v(c.bal.nci), fmt: 'num', source: factSrc(c.bal.nci, 'Non-controlling interests, book value') ?? est('none tagged') },
+      { id: 'pref', label: 'Preferred shares', unit: cur, value: v(c.bal.pref), fmt: 'num', source: factSrc(c.bal.pref, 'Preferred shares, book value') ?? est('none tagged') },
+      { id: 'shares', label: 'Shares outstanding', unit: 'm', value: c.shares.v, fmt: 'num', source: { title: `SEC ${c.shares.form}`, note: `as of ${c.shares.asOf}, ${c.shares.concept}`, url: c.shares.url } },
+      { id: 'price', label: `Share price (${c.price.symbol})`, unit: c.currency === 'CAD' ? 'C$' : 'US$', value: c.price.v, fmt: 'px', source: { title: `${c.price.exchange} close, Yahoo Finance`, date: c.price.date } },
+    ]),
+    ...g('Terminal value', [
+      { id: 'tv_mode', label: 'Terminal method (0 = perpetuity growth, 1 = exit multiple)', unit: 'flag', value: a.terminal === 'multiple' ? 1 : 0, fmt: 'flag', min: 0, max: 1, step: 1, source: est('chosen when the model was built') },
+      { id: 'exit_mult', label: 'Exit EV / EBITDA multiple', unit: 'x', value: +(evNow / ebitda).toFixed(2), fmt: 'x',
+        source: est(`today's trading multiple: enterprise value at the current price / FY${fy[H - 1]} EBITDA`) },
+    ]),
+  ];
+
+  const row = (id: string, label: string, unit: string, fmt: string, f: (x: any) => string | number, extra: object = {}): Item => ({ kind: 'row', id, label, unit, fmt, f, ...extra }) as Item;
+  const sc = (id: string, label: string, unit: string, fmt: string, f: (x: any) => string, extra: object = {}): Item => ({ kind: 'scalar', id, label, unit, fmt, f, ...extra }) as Item;
+  const rowNo = (x: any, id: string) => x.i(id).match(/\$(\d+)$/)![1];
+  const hv = (x: any, id: string) => `INDEX(Inputs!$C$${rowNo(x, id + '_h1')}:$C$${rowNo(x, id + '_h' + H)},${x.k + 1})`;
+  const H_ = H;
+  // Straight-line fade from the year 1 value to the last-year value over the forecast.
+  // Year 1 value held for `hold` years (e.g. a company's capital plan), then a straight line to the last-year value.
+  const fade = (x: any, a1: string, aN: string) => `(${x.i(a1)}+((${aN})-${x.i(a1)})*MAX(0,${x.r('t')}-MAX(1,${x.i('hold')}))/MAX(1,${x.i('years')}-MAX(1,${x.i('hold')})))`;
+  const wacc = (x: any) => x.s('wacc');
+
+  const items: Item[] = [
+    { section: 'Valuation summary' },
+    sc('ev', 'Enterprise value (present value of free cash flow and terminal value)', cur, 'num', x => `SUM(${x.row('pv_fcf')})+${x.s('pv_tv')}`, { bold: true }),
+    sc('eq', 'Equity value (EV - debt + cash - non-controlling interests - preferred)', cur, 'num', x => `${x.s('ev')}-${x.i('debt')}+${x.i('cash')}-${x.i('nci')}-${x.i('pref')}`, { bold: true }),
+    sc('per_share', 'Value per share', c.currency === 'CAD' ? 'C$' : 'US$', 'px', x => `${x.s('eq')}/${x.i('shares')}`, { bold: true }),
+    sc('upside', 'Upside to the current share price', '%', 'pct', x => `${x.s('per_share')}/${x.i('price')}-1`, { bold: true }),
+    sc('tv_share', 'Terminal value share of enterprise value', '%', 'pct', x => `${x.s('pv_tv')}/${x.s('ev')}`),
+    sc('ev_ebitda', 'Implied EV / EBITDA, forecast year 1', 'x', 'x', x => `${x.s('ev')}/INDEX(${x.row('ebitda')},1,${H_ + 1})`),
+    sc('mkt_ev', 'Enterprise value at the current share price', cur, 'num', x => `${x.i('price')}*${x.i('shares')}+${x.i('debt')}-${x.i('cash')}+${x.i('nci')}+${x.i('pref')}`),
+
+    { section: 'Discount rate' },
+    sc('ke', 'Cost of equity (CAPM: risk-free + beta x ERP)', '%', 'pct', x => `${x.i('rf')}+${x.i('beta')}*${x.i('erp')}`),
+    sc('kd_at', 'After-tax cost of debt', '%', 'pct', x => `${x.i('kd')}*(1-${x.i('tax')})`),
+    sc('mcap', 'Market value of equity (price x shares)', cur, 'num', x => `${x.i('price')}*${x.i('shares')}`),
+    sc('w_d', 'Debt weight: debt / (debt + market equity)', '%', 'pct', x => `${x.i('debt')}/(${x.i('debt')}+${x.s('mcap')})`),
+    sc('wacc_capm', 'WACC from the build-up', '%', 'pct', x => `(1-${x.s('w_d')})*${x.s('ke')}+${x.s('w_d')}*${x.s('kd_at')}`),
+    sc('wacc', 'WACC used', '%', 'pct', x => `IF(${x.i('wacc_mode')}=1,${x.i('wacc_in')},${x.s('wacc_capm')})`, { bold: true }),
+
+    { section: 'Terminal value' },
+    sc('nopat_n1', 'NOPAT in the year after the forecast', cur, 'num', x => `INDEX(${x.row('nopat')},1,${x.i('years')}+${H_})*(1+${x.i('g_term')})`),
+    sc('ronic_used', 'RONIC used (WACC when left at 0)', '%', 'pct', x => `IF(${x.i('ronic')}=0,${wacc(x)},${x.i('ronic')})`),
+    sc('tv_growth', 'Terminal value, perpetuity growth: NOPAT x (1 - g / RONIC) / (WACC - g)', cur, 'num', x => `${x.s('nopat_n1')}*(1-${x.i('g_term')}/${x.s('ronic_used')})/(${wacc(x)}-${x.i('g_term')})`),
+    sc('tv_mult', 'Terminal value, exit multiple x last-year EBITDA', cur, 'num', x => `${x.i('exit_mult')}*INDEX(${x.row('ebitda')},1,${x.i('years')}+${H_})`),
+    sc('tv', 'Terminal value used', cur, 'num', x => `IF(${x.i('tv_mode')}=1,${x.s('tv_mult')},${x.s('tv_growth')})`, { bold: true }),
+    sc('tv_mult_implied', 'Cross-check: EV / EBITDA implied by the terminal value used', 'x', 'x', x => `${x.s('tv')}/INDEX(${x.row('ebitda')},1,${x.i('years')}+${H_})`),
+    sc('pv_tv', 'Present value of the terminal value', cur, 'num', x => `${x.s('tv')}/(1+${wacc(x)})^(${x.i('years')}-${x.i('stub')})`),
+
+    { section: 'Timeline' },
+    row('t', 'Forecast year (0 or less = reported)', '#', 'int', x => (x.first ? -(H_ - 1) : `${x.p('t')}+1`)),
+    row('year', 'Fiscal year', 'year', 'year', x => `${fy[H_ - 1]}+${x.r('t')}`, { bold: true }),
+    row('fc', 'Forecast flag', 'flag', 'flag', x => `IF(${x.r('t')}>0,1,0)`),
+
+    { section: 'Operating forecast' },
+    row('growth', 'Revenue growth', '%', 'pct', x => (x.k < H_ ? (x.first ? '""' : `${x.r('rev')}/${x.p('rev')}-1`) : fade(x, 'g1', x.i('g_term')))),
+    row('rev', 'Revenue', cur, 'num', x => (x.k < H_ ? hv(x, 'rev') : `${x.p('rev')}*(1+${x.r('growth')})`), { bold: true }),
+    row('margin', 'EBIT margin', '%', 'pct', x => (x.k < H_ ? `${x.r('ebit')}/${x.r('rev')}` : fade(x, 'm1', x.i('m_target')))),
+    row('ebit', 'EBIT', cur, 'num', x => (x.k < H_ ? hv(x, 'ebit') : `${x.r('rev')}*${x.r('margin')}`)),
+    row('da', 'Depreciation and amortization', cur, 'num', x => (x.k < H_ ? hv(x, 'da') : `${x.r('rev')}*${x.i('da_pct')}`)),
+    row('ebitda', 'EBITDA', cur, 'num', x => `${x.r('ebit')}+${x.r('da')}`, { bold: true }),
+    row('nopat', 'NOPAT: EBIT x (1 - tax)', cur, 'num', x => `${x.r('ebit')}*(1-${x.i('tax')})`),
+    row('reinv_rate', 'Reinvestment rate: (capex - D&A) / NOPAT', '%', 'pct',
+      x => (x.k < H_ ? `IF(${x.r('nopat')}=0,"",(${x.r('capex')}-${x.r('da')})/${x.r('nopat')})` : fade(x, 'reinv1', `${x.i('g_term')}/${x.s('ronic_used')}`))),
+    row('capex', 'Capital expenditures', cur, 'num', x => (x.k < H_ ? hv(x, 'capex') : `${x.r('da')}+${x.r('reinv_rate')}*${x.r('nopat')}`)),
+    row('fcf', 'Unlevered free cash flow: NOPAT + D&A - capex', cur, 'num', x => `${x.r('nopat')}+${x.r('da')}-${x.r('capex')}`, { bold: true }),
+
+    { section: 'Discounting' },
+    row('fcf_used', 'Free cash flow still to come (year 1 excludes the part already passed)', cur, 'num', x => `${x.r('fc')}*${x.r('fcf')}*IF(${x.r('t')}=1,1-${x.i('stub')},1)`),
+    row('period', 'Discount period from the price date (years)', 'years', 'num',
+      x => `IF(${x.r('fc')}=0,0,IF(${x.i('mid')}=1,IF(${x.r('t')}=1,(1-${x.i('stub')})/2,${x.r('t')}-0.5-${x.i('stub')}),${x.r('t')}-${x.i('stub')}))`),
+    row('dfac', 'Discount factor', 'x', 'num', x => `IF(${x.r('fc')}=0,0,1/(1+${wacc(x)})^${x.r('period')})`),
+    row('pv_fcf', 'Present value of free cash flow', cur, 'num', x => `${x.r('fcf_used')}*${x.r('dfac')}`),
+  ];
+  const eq = (f: string | number) => (typeof f === 'number' ? f : '=' + f);
+  return {
+    def: {
+      title: `${c.name} (${c.ticker}) DCF`,
+      inputs: inputs.map(i => ({ ...i, ...over[i.id] })),
+      items: items.map(it => ('kind' in it ? { ...it, f: (x: any) => eq(it.f(x)) } : it)) as Item[],
+      columns: vv => H_ + vv.years,
+    },
+    missing,
+  };
+}
