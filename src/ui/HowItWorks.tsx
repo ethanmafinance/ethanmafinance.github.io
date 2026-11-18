@@ -59,6 +59,8 @@ export function HowItWorks() {
         <li><b>Tax pool:</b> for an operating asset, part of the cost may already be deducted. The tax pool input sets how much of the cost is still available for CCA at the start, which matters when you buy or refinance a built asset.</li>
       </ul>
 
+      <p><b>Output P-values:</b> the gap between the one-year P90 rating case and P50 gives the one-year output spread (P90 is 1.28 standard deviations below P50 on a normal distribution). The table runs P50, P75, P90, P95 and P99 output through the same model in every year, with debt as sized at close, and reports equity IRR, minimum DSCR and lock-up years. At P90 it returns the rating case. Holding a one-year level for the whole life overstates long-run risk, because year-to-year swings average out and only resource estimate error persists; the split between the two is not published, so the table shows the single-bad-year view lenders test.</p>
+
       <h2>11. Toll roads and bridges: traffic, tolls, growing debt service</h2>
       <ul>
         <li><b>Revenue:</b> traffic times the average toll. Traffic ramps up from a share of its mature level over the ramp-up years, then grows at a set rate. Tolls rise each year by a share of CPI: toll x (CPI index)^share. Canadian concessions often cap increases below CPI; the Confederation Bridge cap is 75% of CPI.</li>

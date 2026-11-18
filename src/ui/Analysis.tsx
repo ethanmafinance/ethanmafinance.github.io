@@ -220,3 +220,32 @@ export function RatesPanel({ m, v, closeDate, onApply }: { m: Model; v: V; close
     </div>
   );
 }
+
+// Output P-values (renewables): the spread implied by the one-year P90 rating case against P50, applied as a
+// persistent output level from financial close, with debt held as sized. Revenue is price x output, so an output
+// level f is the revenue change f - 1 on the same model.
+const ZS: [string, number][] = [['P50', 0], ['P75', 0.6745], ['P90', 1.2816], ['P95', 1.6449], ['P99', 2.3263]];
+export function PValueCard({ m, v }: { m: Model; v: V }) {
+  const sigma = (1 - v.energy_sizing / v.energy_p50) / 1.2816;
+  const rows = useMemo(() => {
+    const out = ZS.map(([l, z]) => {
+      const f = 1 - z * sigma, r = run(m, v, { st_rev: (1 + v.st_rev) * f - 1 });
+      return { l, f, irr: r.scalar.equity_irr, min: r.scalar.min_dscr, lock: count(r.row.lock, x => x === 1), below: count(r.row.dscr_actual, x => x < 1) };
+    });
+    m.set(v);
+    return out;
+  }, [m, v, sigma]);
+  if (!(sigma > 0)) return null;
+  return (
+    <div className="card">
+      <h2>Output P-values</h2>
+      <div className="scroll-x"><table>
+        <thead><tr><th>Output level (every year)</th><th>GWh / yr</th><th>Equity IRR</th><th>Min DSCR</th><th>Lock-up years</th><th>Years below 1.00x</th></tr></thead>
+        <tbody>{rows.map(r => (
+          <tr key={r.l}><td>{r.l}</td><td>{fmt(v.energy_p50 * r.f)}</td><td>{fmt(r.irr, 'pct')}</td><td className={r.min < 1 ? 'diff-off' : ''}>{fmt(r.min, 'x')}</td><td>{r.lock}</td><td className={r.below ? 'diff-off' : ''}>{r.below}</td></tr>
+        ))}</tbody>
+      </table></div>
+      <p className="note">The one-year P90 ({fmt(v.energy_sizing)} GWh) against P50 ({fmt(v.energy_p50)} GWh) implies a one-year output spread of {fmt(sigma, 'pct')} (normal distribution; P90 is 1.28 standard deviations below P50). Each row holds that output level in every year with debt as sized at close. Year-to-year swings average out over a project's life while an error in the resource estimate does not, and the split is not published, so these rows overstate long-run risk and show the coverage a lender tests in a single bad year. P50 is marked est. in the inputs, so the spread is an estimate too.</p>
+    </div>
+  );
+}
