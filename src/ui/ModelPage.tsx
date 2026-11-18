@@ -73,8 +73,14 @@ export function ModelPage({ mod }: { mod: Module }) {
       m.set({ [id]: v });
       return out;
     });
+    // Two-way table: interest rate x construction cost (debt re-sized, as at bid), or for an operating asset
+    // with no entry price, revenue x operating costs on actual cash flows.
+    const S = [-0.1, -0.05, 0, 0.05, 0.1], R = [-0.01, -0.005, 0, 0.005, 0.01];
+    const grid = mod.noEntry
+      ? { rows: S.map(a => ({ label: `${a > 0 ? '+' : ''}${a * 100}%`, cells: S.map(b => { m.set({ ...deferred, st_rev: a, st_opex: b }); return metric(); }) })), cols: S.map(b => `${b > 0 ? '+' : ''}${b * 100}%`), rowHead: 'Revenue', colHead: 'Operating costs' }
+      : { rows: R.map(a => ({ label: fmt(deferred.rate + a, 'pct'), cells: S.map(b => { m.set({ ...deferred, rate: deferred.rate + a, capex: deferred.capex * (1 + b) }); return metric(); }) })), cols: S.map(b => `${b > 0 ? '+' : ''}${b * 100}%`), rowHead: 'Interest rate', colHead: 'Construction cost' };
     m.hf.destroy();
-    return { base, rows };
+    return { base, rows, grid };
   }, [def, deferred, mod.noEntry]);
 
   const [busy, download] = useDownload(model, mod.name);
@@ -143,6 +149,17 @@ export function ModelPage({ mod }: { mod: Module }) {
             <Tornado rows={sens.rows} base={sens.base} fmt={v => fmt(v, mod.noEntry ? 'num' : 'pct')} />
             <p className="note">Base case {fmt(sens.base, mod.noEntry ? 'num' : 'pct')}. Each bar moves one input and holds the rest.</p>
           </div>
+        </div>
+
+        <div className="card">
+          <h2>{mod.noEntry ? 'Equity value at 8% (C$m)' : 'Equity IRR'} by {sens.grid.rowHead.toLowerCase()} and {sens.grid.colHead.toLowerCase()}</h2>
+          <div className="scroll-x"><table>
+            <thead><tr><th>{sens.grid.rowHead} / {sens.grid.colHead}</th>{sens.grid.cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>{sens.grid.rows.map((r, i) => (
+              <tr key={r.label}><td>{r.label}</td>{r.cells.map((v, j) => <td key={j} style={i === 2 && j === 2 ? { fontWeight: 700 } : undefined}>{fmt(v, mod.noEntry ? 'num' : 'pct')}</td>)}</tr>
+            ))}</tbody>
+          </table></div>
+          <p className="note">{mod.noEntry ? 'Changes to actual revenue and operating costs after the start date; debt service stays as in place.' : 'A rate change before financial close re-sizes the debt, as lenders would at bid. Construction cost moves the whole capex budget.'} Base case in bold.</p>
         </div>
 
         <div className="two">
