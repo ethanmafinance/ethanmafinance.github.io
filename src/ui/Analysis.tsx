@@ -34,12 +34,13 @@ const SCENARIOS: [string, (v: V) => V][] = [
   ['Interest rate +100bp before close (debt re-sized)', v => ({ rate: v.rate + 0.01 })],
 ];
 
-export function StressPanel({ m, v, noEntry }: { m: Model; v: V; noEntry?: boolean }) {
+export function StressPanel({ m, v, noEntry, delay }: { m: Model; v: V; noEntry?: boolean; delay?: boolean }) {
   const out = useMemo(() => {
     const refi = v.maturity > 0 && v.maturity < v.tenor;
     const cases: [string, (v: V) => V][] = refi
       ? [...SCENARIOS, [`Balloon refinanced 2pt above the original rate (year ${v.maturity})`, x => ({ refi_spread: x.refi_spread + 0.02 })]]
-      : SCENARIOS;
+      : [...SCENARIOS];
+    if (delay) cases.push(['Construction delay of 1 year (delay damages cover debt service)', () => ({ st_delay: 1 })], ['Construction delay of 2 years', () => ({ st_delay: 2 })]);
     // An operating asset's debt is already in place, so the re-sizing case does not apply.
     const rows = cases.filter(([label]) => !(noEntry && label.includes('debt re-sized'))).map(([label, ov]) => {
       const r = run(m, v, ov(v));
@@ -54,7 +55,7 @@ export function StressPanel({ m, v, noEntry }: { m: Model; v: V; noEntry?: boole
     const balloon = run(m, v).scalar.balloon;
     m.set(v);
     return { rows, be, refi, balloon };
-  }, [m, v, noEntry]);
+  }, [m, v, noEntry, delay]);
   const b = (x: number | undefined, sign = 1) => (x === undefined ? 'beyond range' : fmt(sign * x, 'pct'));
   return (
     <div className="card">

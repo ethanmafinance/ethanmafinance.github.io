@@ -31,6 +31,8 @@ export type Module = {
   noEntry?: string;
   // Financial close date of the example, for the credit spread over the GoC long bond on that day.
   closeDate?: string;
+  // Shown when the example is modelled from financial close with construction still ahead (a delay case applies).
+  delayCase?: boolean;
 };
 
 const g = (group: string, list: Omit<Input, 'group'>[]): Input[] => list.map(i => ({ ...i, group }));
@@ -76,6 +78,7 @@ export const engineInputs: Input[] = [
     { id: 'st_opex', label: 'Operating cost change', unit: '%', value: 0, fmt: 'pct' },
     { id: 'st_maint', label: 'Lifecycle and maintenance capex change', unit: '%', value: 0, fmt: 'pct' },
     { id: 'st_cpi', label: 'Actual inflation minus base case', unit: 'pt / yr', value: 0, fmt: 'pct' },
+    { id: 'st_delay', label: 'Construction delay after close: operating years lost (contract end fixed; contractor delay damages cover scheduled debt service)', unit: 'years', value: 0, fmt: 'int', min: 0, max: 3, step: 1 },
   ]),
 ];
 
@@ -146,6 +149,7 @@ export function projectFinance(mod: Module): ModelDef {
     row('ops_year', 'Operating year', '#', x => `${x.r('ops_flag')}*(${x.r('year_idx')}-${x.i('con_years')})`, { fmt: 'int' }),
     row('tenor_flag', 'Debt tenor flag', 'flag', x => `IF(AND(${x.r('ops_flag')}=1,${x.r('ops_year')}<=${x.i('tenor')}),1,0)`, { fmt: 'flag' }),
     row('refi_flag', 'Refinanced debt flag', 'flag', x => `IF(AND(${x.r('tenor_flag')}=1,${x.i('maturity')}>0,${x.r('ops_year')}>${x.i('maturity')}),1,0)`, { fmt: 'flag' }),
+    row('dly', 'Delay flag: operating year lost to a construction delay', 'flag', x => `IF(AND(${x.r('ops_flag')}=1,${x.r('ops_year')}<=${x.i('st_delay')}),1,0)`, { fmt: 'flag' }),
     row('index', 'Inflation index (actual)', 'x', x => `(1+${x.i('cpi')}+${x.i('st_cpi')})^(${x.r('year_idx')}-1)`, { fmt: 'x' }),
     row('index_b', 'Inflation index (base case)', 'x', x => `(1+${x.i('cpi')})^(${x.r('year_idx')}-1)`, { fmt: 'x' }),
     row('df', 'Discount factor to COD at the debt rate (tenor only)', 'x', x => `${x.r('tenor_flag')}/(1+${x.i('rate')})^${x.r('ops_year')}`, { fmt: 'x' }),
@@ -165,10 +169,12 @@ export function projectFinance(mod: Module): ModelDef {
 
     { section: mod.name + ': operations' },
     ...mod.items,
-    row('revenue', 'Total revenue', 'C$m', x => `(1+${x.i('st_rev')})*(${sumOf(roles('revenue'))(x)})`, { fmt: 'num', bold: true }),
-    row('opex', 'Total operating costs', 'C$m', x => `(1+${x.i('st_opex')})*(${sumOf(roles('opex'))(x)})`, { fmt: 'num' }),
-    row('ebitda', 'EBITDA', 'C$m', x => `${x.r('revenue')}-${x.r('opex')}`, { fmt: 'num', bold: true }),
-    row('maint', 'Maintenance and lifecycle capex', 'C$m', x => `(1+${x.i('st_maint')})*(${sumOf(roles('maint'))(x)})`, { fmt: 'num' }),
+    row('revenue', 'Total revenue', 'C$m', x => `(1-${x.r('dly')})*(1+${x.i('st_rev')})*(${sumOf(roles('revenue'))(x)})`, { fmt: 'num', bold: true }),
+    row('opex', 'Total operating costs', 'C$m', x => `(1-${x.r('dly')})*(1+${x.i('st_opex')})*(${sumOf(roles('opex'))(x)})`, { fmt: 'num' }),
+    // Debt service does not depend on actual revenue (it is set by the base-case sizing rows), so this is not circular.
+    row('ld', 'Contractor delay damages (cover scheduled debt service)', 'C$m', x => `${x.r('dly')}*${x.r('ds')}`, { fmt: 'num' }),
+    row('ebitda', 'EBITDA', 'C$m', x => `${x.r('revenue')}-${x.r('opex')}+${x.r('ld')}`, { fmt: 'num', bold: true }),
+    row('maint', 'Maintenance and lifecycle capex', 'C$m', x => `(1-${x.r('dly')})*(1+${x.i('st_maint')})*(${sumOf(roles('maint'))(x)})`, { fmt: 'num' }),
 
     { section: 'Base case used to size the debt' },
     ...baseItems,
@@ -221,7 +227,7 @@ export function projectFinance(mod: Module): ModelDef {
     row('debt_close', 'Closing balance', 'C$m', x => `${x.r('debt_open')}+${x.r('draw')}+${x.r('int_cap')}-${x.r('principal')}`, { fmt: 'num' }),
     // Carried forward from the maturity year; debt service reads last year's value, so there is no circular reference.
     row('balloon_r', 'Balloon at legal maturity (carried forward)', 'C$m', x => `IF(AND(${x.i('maturity')}>0,${x.i('maturity')}<${x.i('tenor')},${x.r('ops_year')}=${x.i('maturity')}),${x.r('debt_close')},${x.p('balloon_r')})`, { fmt: 'num' }),
-    row('dscr_actual', 'DSCR', 'x', x => `IF(${x.r('ds')}>0,${x.r('cfads')}/${x.r('ds')},"")`, { fmt: 'x' }),
+    row('dscr_actual', 'DSCR (not tested in delay years, when delay damages pay debt service)', 'x', x => `IF(AND(${x.r('ds')}>0,${x.r('dly')}=0),${x.r('cfads')}/${x.r('ds')},"")`, { fmt: 'x' }),
 
     { section: 'Debt sizing case coverage (on the actual debt)' },
     row('l_ti_b', 'Taxable income after interest (sizing case)', 'C$m', x => `${x.r('ebitda_b')}-${x.r('cca_b')}-${x.r('int_paid')}`, { fmt: 'num' }),
@@ -235,7 +241,7 @@ export function projectFinance(mod: Module): ModelDef {
     row('dsra_change', 'DSRA funding (release)', 'C$m', x => `${x.r('dsra')}-${x.p('dsra')}`, { fmt: 'num' }),
     row('cash_avail', 'Cash available for distribution', 'C$m', x => `${x.r('ops_flag')}*(${x.r('cfads')}-${x.r('ds')}-${x.r('dsra_change')})`, { fmt: 'num' }),
     row('lock', 'Lock-up test failed', 'flag',
-      x => `IF(AND(${x.r('ds')}>0,${x.r('ops_year')}<${x.i('ops_years')},${x.r('cfads')}<${x.i('lockup')}*${x.r('ds')}),1,0)`, { fmt: 'flag' }),
+      x => `IF(AND(${x.r('ds')}>0,${x.r('dly')}=0,${x.r('ops_year')}<${x.i('ops_years')},${x.r('cfads')}<${x.i('lockup')}*${x.r('ds')}),1,0)`, { fmt: 'flag' }),
     row('trapped', 'Cash trapped by lock-up', 'C$m', x => `IF(${x.r('lock')}=1,${x.p('trapped')}+${x.r('cash_avail')},0)`, { fmt: 'num' }),
     row('dist', 'Distributions to equity', 'C$m', x => `IF(${x.r('lock')}=1,0,${x.r('cash_avail')}+${x.p('trapped')})`, { fmt: 'num', bold: true }),
 

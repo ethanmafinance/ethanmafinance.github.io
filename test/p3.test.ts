@@ -120,3 +120,24 @@ test('deferring equity to COD: same value at the debt rate, higher IRR, sources 
   assert.equal(b.scalar.debt, a.scalar.debt); // sizing unchanged
   assert.ok(Math.abs(b.scalar.gearing - a.scalar.gearing) < 1e-12);
 });
+
+test('construction delay: lost years carry no revenue, damages pay debt service, debt unchanged', async () => {
+  const { projectFinance } = await import('../src/engine/projectFinance.ts');
+  const { p3 } = await import('../src/modules/p3.ts');
+  const { Model } = await import('../src/engine/sheet.ts');
+  const def = projectFinance(p3);
+  const base = Object.fromEntries(def.inputs.map(i => [i.id, i.value]));
+  const m = new Model(def, base);
+  const a = m.results();
+  m.set({ ...base, st_delay: 1 });
+  const b = m.results();
+  const k = b.row.ops_year.indexOf(1);
+  assert.equal(b.row.revenue[k], 0);
+  assert.ok(Math.abs(b.row.ld[k] - b.row.ds[k]) < 1e-9 && b.row.ds[k] > 0);
+  assert.ok(!Number.isFinite(b.row.dscr_actual[k]), 'not tested in a delay year');
+  assert.ok(Number.isFinite(b.row.dscr_actual[k + 1]));
+  assert.ok(Math.abs(b.scalar.debt - a.scalar.debt) < 1e-9, 'debt sized on the base case');
+  assert.ok(b.row.revenue.slice(k + 1).every((x, j) => Math.abs(x - a.row.revenue[k + 1 + j]) < 1e-9), 'later years unchanged, contract end fixed');
+  assert.ok(b.scalar.equity_irr < a.scalar.equity_irr);
+  m.hf.destroy();
+});
