@@ -6,15 +6,17 @@ import { p3 } from '../modules/p3.ts';
 import { renewables } from '../modules/renewables.ts';
 import { tollRoad } from '../modules/tollRoad.ts';
 import { utility } from '../modules/utility.ts';
+import { digital } from '../modules/digital.ts';
 import { ModelPage } from './ModelPage.tsx';
 import { UtilityPage } from './UtilityPage.tsx';
+import { DigitalPage } from './DigitalPage.tsx';
 import { HowItWorks } from './HowItWorks.tsx';
 import { EQUITY_EXAMPLES, EquityExample, EquityModel, EquityStart, equityVerified, parseEquityRoute } from './EquityPage.tsx';
 import { PortfolioPage } from './Portfolio.tsx';
 import { MarketsPage, MarketTiles, Source } from './Markets.tsx';
 import { useMarket } from '../data/boc.ts';
 
-const LIVE = { p3, renewables, toll: tollRoad, utility };
+const LIVE = { p3, renewables, toll: tollRoad, utility, digital };
 // Infrastructure asset classes in picker order. `id` set = live module.
 const ASSETS: { name: string; blurb: string; id?: keyof typeof LIVE }[] = [
   { name: 'Social infrastructure P3', blurb: 'Hospitals, transit and courthouses paid by availability payments.', id: 'p3' },
@@ -22,7 +24,7 @@ const ASSETS: { name: string; blurb: string; id?: keyof typeof LIVE }[] = [
   { name: 'Toll roads', blurb: 'Transport concessions with traffic ramp-up and toll escalation.', id: 'toll' },
   { name: 'Midstream and pipelines', blurb: 'Take-or-pay capacity contracts plus volume.' },
   { name: 'Regulated utilities', blurb: 'Rate base, deemed equity and allowed ROE.', id: 'utility' },
-  { name: 'Digital infrastructure', blurb: 'Data centres, towers and fibre: lease-up and tenancy.' },
+  { name: 'Data centres', blurb: 'Leased capacity: rent escalators, lease rollover, lease-up and an exit cap rate.', id: 'digital' },
 ];
 // Worked examples built end to end from public sources.
 // Shown only while the model reproduces every published figure within 1%, or the wider tolerance a check states
@@ -31,6 +33,7 @@ const EXAMPLES = [
   { mod: p3, name: 'Humber River Hospital P3', meta: 'Toronto, financial close 2011', what: 'Rebuilt from the Infrastructure Ontario value for money report and DBRS ratings. Matches published debt, coverage, gearing and payments.' },
   { mod: renewables, name: 'Dufferin Wind', meta: '91.4 MW, Ontario, 2015 bond refinancing', what: 'Rebuilt from Morningstar DBRS releases. Matches the $200 million bond, rating-case coverage, realized FIT prices and later bond balances.' },
   { mod: utility, name: 'Toronto Hydro 2025-2029 rate plan', meta: 'Electricity distribution, Toronto, OEB decision 2024', what: 'Rebuilt from the OEB-approved settlement and draft rate order. Matches rate base, deemed interest, return on equity and revenue requirement in every check; values the equity at a target IRR.' },
+  { mod: digital, name: 'Blue Owl data centre portfolio', meta: '12 US data centres, 235 MW, Sep 2026 valuation', what: 'Rebuilt from the trust 10-Q filing. Matches the published gross asset value and all four published value sensitivities to the discount and exit cap rates; tested out of sample on the December 2025 portfolio.' },
   { mod: tollRoad, name: 'Confederation Bridge', meta: 'Toll bridge, PEI, operating asset from Sep 2017', what: 'Rebuilt from DBRS releases. Matches the 6.17% bonds outstanding in 2017 to 2019, 2018 coverage, traffic and tolls; values the equity at a target IRR.' },
 ];
 const verified = (m: Module) => {
@@ -73,7 +76,7 @@ export function App() {
         </div>
       </header>
       <main className="page">
-        {page === 'model' && mod && (mod.engine === 'regulated' ? <UtilityPage key={mod.id} mod={mod} /> : <ModelPage key={mod.id} mod={mod} />)}
+        {page === 'model' && mod && (mod.engine === 'regulated' ? <UtilityPage key={mod.id} mod={mod} /> : mod.engine === 'lease' ? <DigitalPage key={mod.id} mod={mod} /> : <ModelPage key={mod.id} mod={mod} />)}
         {page === 'equity' && eq && (route.startsWith('equity/example/') ? <EquityExample id={route.slice(15)} /> : eq.ticker ? <EquityModel ticker={eq.ticker} a={eq.a} /> : <EquityStart />)}
         {page === 'how' && <HowItWorks />}
         {page === 'markets' && <MarketsPage />}

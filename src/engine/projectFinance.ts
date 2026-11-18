@@ -18,7 +18,7 @@ import type { Input, Item, ModelDef } from './sheet.ts';
 export type Module = {
   id: string; name: string; blurb: string; inputs: Input[]; items: Item[];
   // Which engine builds the model: project finance (default) or regulated utility.
-  engine?: 'regulated';
+  engine?: 'regulated' | 'lease';
   // Per-module values and sources for the engine's inputs (e.g. the example's financing terms).
   defaults?: Record<string, Pick<Input, 'value' | 'source'>>;
   // The payment a bidder solves for a target equity IRR (bid solver).

@@ -9,6 +9,7 @@
 // Column 0 is the close of the year before the plan (entry); columns 1..N are the plan and projection years.
 import type { Input, Item, ModelDef } from './sheet.ts';
 import { projectFinance, type Module } from './projectFinance.ts';
+import { lease } from './lease.ts';
 
 const g = (group: string, list: Omit<Input, 'group'>[]): Input[] => list.map(i => ({ ...i, group }));
 const plan = (id: string, label: string, unit: string, vals: number[]) =>
@@ -131,4 +132,4 @@ export function regulated(mod: Module): ModelDef {
 }
 
 // The model definition for any module, whichever engine it uses.
-export const defOf = (m: Module): ModelDef => (m.engine === 'regulated' ? regulated(m) : projectFinance(m));
+export const defOf = (m: Module): ModelDef => (m.engine === 'regulated' ? regulated(m) : m.engine === 'lease' ? lease(m) : projectFinance(m));

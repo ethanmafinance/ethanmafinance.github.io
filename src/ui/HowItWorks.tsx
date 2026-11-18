@@ -77,7 +77,15 @@ export function HowItWorks() {
         <li><b>After the plan:</b> additions grow at a set rate, depreciation keeps the last plan year's rate, and PILs keep the plan's ratio to the return on equity.</li>
       </ul>
 
-      <h2>13. Equities: DCF from SEC filings</h2>
+      <h2>13. Data centres: lease DCF with an exit cap rate</h2>
+      <ul>
+        <li><b>Rent:</b> base rent for the next twelve months on commenced leases, escalated each year. Leases expiring in a year roll at the start of it: the share that renews keeps its rent plus any mark-to-market; the rest is vacant for the downtime months, then re-let at the same rent. Vacant capacity can be leased up from a chosen year at the current rent per MW.</li>
+        <li><b>NOI:</b> a margin on base rent. Under net leases tenants reimburse most operating costs, so the margin covers what is not reimbursed and property management.</li>
+        <li><b>Value:</b> NOI over the hold discounted at the unlevered discount rate, plus the exit value (NOI in the year after the hold divided by the exit cap rate, less selling costs) discounted from the end of the hold. This is the appraisal method behind the published values of non-traded real estate and infrastructure trusts, which disclose the weighted discount and exit cap rates and the value change for 25bp on each.</li>
+        <li><b>Blue Owl example:</b> the escalator and NOI margin are not published. The value change for a 25bp move does not depend on the level of NOI, only its shape, so the escalator is the one at which all four published sensitivities are reproduced (2.4% to 2.5% at a 10-year hold), and the margin then matches the published value. The December 2025 portfolio, at that date's own regional rates, is a test the model was not fitted to: the total comes within 1.4%.</li>
+      </ul>
+
+      <h2>14. Equities: DCF from SEC filings</h2>
       <ul>
         <li><b>Data:</b> a script reads each company's annual 10-K, 20-F or 40-F figures from SEC EDGAR XBRL data, the latest close and five years of monthly prices from Yahoo Finance, and the 10-year risk-free rate (US Treasury, or Government of Canada for companies that report in Canadian dollars). Every reported figure links to the filing it came from. Companies whose XBRL data is stale or incomplete are left out rather than shown with gaps.</li>
         <li><b>Free cash flow:</b> unlevered free cash flow = NOPAT + D&amp;A - capex, where NOPAT = EBIT x (1 - tax). The last three fiscal years are shown as reported.</li>
@@ -92,7 +100,7 @@ export function HowItWorks() {
         <li><b>Limits:</b> no analyst consensus, working capital and leases are not modelled separately, and banks and insurers are excluded because an unlevered DCF does not fit them.</li>
       </ul>
 
-      <h2>14. Sources</h2>
+      <h2>15. Sources</h2>
       <p>Every default carries a citation. Values tagged <b>est.</b> are not published; the note beside each one shows how it was set. The "published vs model" table compares the output with figures from public filings and rating reports.</p>
     </article>
   );

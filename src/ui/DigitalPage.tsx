@@ -1,0 +1,149 @@
+// Data centre page: lease DCF (Engine D) with the shared input panel, calibration table, cases, memo and Excel export.
+import { useDeferredValue, useMemo, useState } from 'react';
+import { Model } from '../engine/sheet.ts';
+import { lease } from '../engine/lease.ts';
+import type { Module } from '../engine/projectFinance.ts';
+import { ChecksCard, fmt, InputsPanel, useDownload } from './ModelPage.tsx';
+import { BarChart, Tornado } from './Charts.tsx';
+import { Calibration, MemoCard, Rows, SensTable } from './Memo.tsx';
+import { CasesPanel } from './Cases.tsx';
+
+type V = Record<string, number>;
+const STEP = [-0.005, -0.0025, 0, 0.0025, 0.005];
+// Sensitivity of value: input, label, move each way, relative or absolute.
+const DRIVERS: [string, string, number, 'rel' | 'abs'][] = [
+  ['rate', 'Discount rate', 0.0025, 'abs'],
+  ['cap', 'Exit cap rate', 0.0025, 'abs'],
+  ['esc', 'Rent escalator', 0.005, 'abs'],
+  ['margin', 'NOI margin', 0.05, 'rel'],
+  ['renew', 'Renewal rate (12 months down otherwise)', 0.25, 'abs'],
+  ['mtm', 'Mark-to-market on rollover', 0.1, 'abs'],
+];
+const pct2 = (v: number) => `${(v * 100).toFixed(2)}%`;
+const lab = (d: number, kind: 'rel' | 'abs', id: string) => (kind === 'rel' ? `${d * 100}%` : id === 'renew' || id === 'mtm' ? `${d * 100}pt` : `${d * 1e4}bp`);
+
+export function DigitalPage({ mod }: { mod: Module }) {
+  const def = useMemo(() => lease(mod), [mod]);
+  const defaults = useMemo(() => Object.fromEntries(def.inputs.map(i => [i.id, i.value])), [def]);
+  const [values, setValues] = useState<V>(defaults);
+  const model = useMemo(() => new Model(def, defaults), [def, defaults]);
+  const res = useMemo(() => { model.set(values); return model.results(); }, [model, values]);
+  const [busy, download] = useDownload(model, mod.name);
+  const scratch = useMemo(() => new Model(def, defaults), [def, defaults]);
+  const deferred = useDeferredValue(values);
+
+  const extra = useMemo(() => {
+    const m = new Model(def, deferred);
+    const val = (ov: V) => { m.set({ ...deferred, ...ov }); return m.results().scalar.value; };
+    const grid = STEP.map(a => STEP.map(b => val({ rate: deferred.rate + a, cap: deferred.cap + b })));
+    const base = val({});
+    const rows = DRIVERS.map(([id, label, d, kind]) => {
+      const v = deferred[id];
+      const lo = kind === 'rel' ? v * (1 - d) : id === 'renew' ? Math.max(0, v - d) : v - d;
+      const hi = kind === 'rel' ? v * (1 + d) : id === 'renew' ? Math.min(1, v + d) : v + d;
+      return { label, lo: val({ [id]: lo }), hi: val({ [id]: hi }), loLabel: lo === v ? 'at limit' : `-${lab(d, kind, id)}`, hiLabel: hi === v ? 'at limit' : `+${lab(d, kind, id)}` };
+    });
+    m.hf.destroy();
+    return { grid, base, rows };
+  }, [def, deferred]);
+
+  const s = res.scalar, r = res.row;
+  const cols = r.year.map((_, k) => k).filter(k => r.hold_flag[k] === 1);
+  const pick = (a: number[]) => cols.map(k => a[k]);
+  const exitYear = r.year[cols.at(-1)!];
+
+  return (
+    <div className="model-layout">
+      <InputsPanel def={def} mod={mod} values={values} defaults={defaults} setValues={setValues} />
+
+      <section className="results">
+        <div className="card" style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div>
+            <h1 style={{ fontSize: 22, margin: 0 }}>{mod.name}</h1>
+            <div className="note">{mod.blurb} US$ millions, nominal, annual periods.</div>
+          </div>
+          <button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button>
+        </div>
+
+        <div className="kpis">
+          {([
+            ['Portfolio value', fmt(s.value), `US$m, ${fmt(values.rate, 'pct')} discount rate`],
+            ['Going-in yield', fmt(s.going_in, 'pct'), `year 1 NOI ${fmt(r.noi[1])}`],
+            ['Value per MW', fmt(s.per_mw), `US$m; rent ${fmt(s.rent_mw)} per leased MW`],
+            ['Exit value share', fmt(s.tv_share, 'pct'), `exit at ${fmt(values.cap, 'pct')} cap, ${exitYear}`],
+            ['IRR at the price', fmt(s.irr, 'pct'), `unlevered, price ${fmt(values.price)}`],
+          ] as const).map(([l, v, sub]) => (
+            <div className="card kpi" key={l}><div className="label">{l}</div><div className="value">{v}</div><div className="sub">{sub}</div></div>
+          ))}
+        </div>
+        {mod.noEntry && <p className="note card">{mod.noEntry}</p>}
+
+        <div className="card">
+          <h2>Value (US$m) by discount rate and exit cap rate</h2>
+          <div className="scroll-x"><table>
+            <thead><tr><th>Discount / exit cap</th>{STEP.map(b => <th key={b}>{pct2(values.cap + b)}</th>)}</tr></thead>
+            <tbody>
+              {STEP.map((a, i) => (
+                <tr key={a}><td>{pct2(values.rate + a)}</td>{extra.grid[i].map((v, j) => <td key={j} style={i === 2 && j === 2 ? { fontWeight: 700 } : undefined}>{fmt(v)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table></div>
+          <p className="note">The two assumptions appraisers disclose. Base case in bold. A 25bp move in either changes value by about {fmt(Math.abs(s.s_dr_up), 'pct')} (discount rate) and {fmt(Math.abs(s.s_cap_up), 'pct')} (exit cap).</p>
+        </div>
+
+        <div className="two">
+          <div className="card">
+            <h2>Value sensitivity</h2>
+            <Tornado rows={extra.rows} base={extra.base} fmt={v => fmt(v)} />
+            <p className="note">Base case US${fmt(extra.base)}m. Each bar moves one input and holds the rest.</p>
+          </div>
+          <div className="card">
+            <h2>Net operating income</h2>
+            <BarChart xs={pick(r.year)} fmt={v => fmt(v)} series={{ name: 'NOI', values: pick(r.noi), color: 'var(--series-1)' }} />
+            <p className="note">Rent escalates {pct2(values.esc)} a year; {fmt(values.renew, 'pct')} of expiring rent renews. Exit value US${fmt(s.exit_value)}m at the end of {exitYear}.</p>
+          </div>
+        </div>
+
+        <CasesPanel id={mod.id} m={scratch} values={values} defaults={defaults} setValues={setValues} metrics={[
+          ['Portfolio value (US$m)', x => fmt(x.scalar.value)], ['Going-in yield', x => fmt(x.scalar.going_in, 'pct')], ['Value per MW (US$m)', x => fmt(x.scalar.per_mw)],
+          ['Exit value share', x => fmt(x.scalar.tv_share, 'pct')], ['IRR at the price', x => fmt(x.scalar.irr, 'pct')],
+        ]} />
+        <ChecksCard mod={mod} res={res} />
+        <MemoCard title={mod.name} sub={`US$ millions, nominal. ${mod.blurb}`} body={() => (
+          <>
+            <section>
+              <h2>Summary</h2>
+              <p>The portfolio ({fmt(values.mw)} MW, {fmt(values.occ, 'pct')} leased, NTM base rent US${fmt(values.ntm)}m) is worth US${fmt(s.value)}m at a {fmt(values.rate, 'pct')} discount rate and a {fmt(values.cap, 'pct')} exit cap after {values.hold} years: a {fmt(s.going_in, 'pct')} going-in yield and US${fmt(s.per_mw)}m per MW. The exit is {fmt(s.tv_share, 'pct')} of value. Bought at US${fmt(values.price)}m the unlevered IRR is {fmt(s.irr, 'pct')}.</p>
+            </section>
+            <div className="memo-two">
+              <section><h2>Assumptions</h2><Rows rows={[
+                ['Rent escalator', pct2(values.esc)], ['NOI margin on base rent', fmt(values.margin, 'pct')], ['Renewal rate / downtime', `${fmt(values.renew, 'pct')} / ${values.downtime} months`],
+                ['Mark-to-market on rollover', fmt(values.mtm, 'pct')], ['Discount rate / exit cap', `${pct2(values.rate)} / ${pct2(values.cap)}`], ['Hold', `${values.hold} years`],
+              ]} /></section>
+              <section><h2>Value by discount rate and exit cap</h2>
+                <table><tbody>
+                  <tr><th>Discount</th>{STEP.filter((_, j) => j % 2 === 0).map(b => <th key={b}>{pct2(values.cap + b)}</th>)}</tr>
+                  {STEP.map((a, i) => i % 2 === 0 && <tr key={a}><td>{pct2(values.rate + a)}</td>{extra.grid[i].filter((_, j) => j % 2 === 0).map((v, j) => <td key={j}>{fmt(v)}</td>)}</tr>)}
+                </tbody></table>
+              </section>
+            </div>
+            <SensTable sens={extra} f={x => fmt(x)} title="Largest sensitivities (value, US$m)" />
+            <Calibration checks={mod.checks} res={res} />
+          </>
+        )} />
+
+        <div className="card">
+          <h2>Annual figures (US$m)</h2>
+          <div className="scroll-x"><table>
+            <thead><tr><th>Line</th>{cols.map(k => <th key={k}>{r.year[k]}</th>)}</tr></thead>
+            <tbody>
+              {([['Rent on leases in place, escalated', 'rent_contract'], ['Rent expiring this year (NTM basis)', 'expiring'], ['Mark-to-market on rolled leases', 'rent_mtm'], ['Downtime on leases not renewed', 'rent_down'], ['Lease-up', 'rent_lu'], ['Base rent', 'rent'], ['Net operating income', 'noi'], ['Exit value', 'exit_cf']] as const).map(([l, id]) => (
+                <tr key={id} className={id === 'rent' || id === 'noi' ? 'total' : ''}><td>{l}</td>{cols.map(k => <td key={k}>{Math.abs(r[id][k]) < 0.05 ? '-' : fmt(r[id][k])}</td>)}</tr>
+              ))}
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+    </div>
+  );
+}
