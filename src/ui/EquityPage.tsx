@@ -8,6 +8,7 @@ import type { Module } from '../engine/projectFinance.ts';
 import { ChecksCard, fmt, InputsPanel, useDownload } from './ModelPage.tsx';
 import { BarChart, LineChart } from './Charts.tsx';
 import { Calibration, MemoCard, Rows } from './Memo.tsx';
+import { CasesPanel } from './Cases.tsx';
 
 type V = Record<string, number>;
 export type Listing = { ticker: string; name: string; currency: string };
@@ -121,6 +122,7 @@ function EquityView({ co, a, over, checks, title }: { co: Company; a: Answers; o
   const model = useMemo(() => new Model(def, defaults), [def, defaults]);
   const res = useMemo(() => { model.set(values); return model.results(); }, [model, values]);
   const [busy, download] = useDownload(model, `${co.ticker} DCF`);
+  const scratch = useMemo(() => new Model(def, defaults), [def, defaults]);
   const deferred = useDeferredValue(values);
 
   const extra = useMemo(() => {
@@ -239,6 +241,10 @@ function EquityView({ co, a, over, checks, title }: { co: Company; a: Answers; o
             <BarChart xs={cols.map(yr)} fmt={v => fmt(v)} series={{ name: 'Free cash flow', values: r.fcf, color: 'var(--series-1)' }} />
           </div>
         </div>
+        <CasesPanel id={`eq.${title ? 'example.' : ''}${co.ticker}.${a.years}.${a.scenario}.${a.wacc}.${a.terminal}`} m={scratch} values={values} defaults={defaults} setValues={setValues} metrics={[
+          ['Value per share', x => `${ccy}${fmt(x.scalar.per_share, 'px')}`], ['Upside to price', x => fmt(x.scalar.upside, 'pct')], ['Enterprise value', x => fmt(x.scalar.ev)],
+          ['WACC', x => fmt(x.scalar.wacc, 'pct')], ['Terminal value share', x => fmt(x.scalar.tv_share, 'pct')], ['Implied EV / EBITDA', x => fmt(x.scalar.ev_ebitda, 'x')],
+        ]} />
         {checks && <ChecksCard mod={{ checks } as Module} res={res} />}
         <MemoCard blocked={missing.length && !def.inputs.some(i => i.group === 'Reported financials' && values[i.id] !== defaults[i.id]) ? `Enter the figures missing from the XBRL data (${missing.join(', ')}) under Reported financials first; the value is not meaningful without them.` : undefined}
           title={title ?? `${co.name} (${co.ticker})`} sub={`Unlevered DCF, ${a.scenario} case, ${values.years}-year forecast. ${ccy} millions except per share. Filings to FY${co.fyEnds.at(-1)!.slice(0, 4)}; price ${co.price.date}.`} body={() => (

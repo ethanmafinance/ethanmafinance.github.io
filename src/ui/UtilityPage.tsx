@@ -7,6 +7,7 @@ import type { Module } from '../engine/projectFinance.ts';
 import { ChecksCard, fmt, InputsPanel, useDownload } from './ModelPage.tsx';
 import { BarChart, LineChart, Tornado } from './Charts.tsx';
 import { Calibration, MemoCard, Rows, SensTable } from './Memo.tsx';
+import { CasesPanel } from './Cases.tsx';
 
 type V = Record<string, number>;
 const ENTRY = [1, 1.2, 1.4, 1.6, 1.8];
@@ -30,6 +31,7 @@ export function UtilityPage({ mod }: { mod: Module }) {
   const model = useMemo(() => new Model(def, defaults), [def, defaults]);
   const res = useMemo(() => { model.set(values); return model.results(); }, [model, values]);
   const [busy, download] = useDownload(model, mod.name);
+  const scratch = useMemo(() => new Model(def, defaults), [def, defaults]);
   const deferred = useDeferredValue(values);
 
   const extra = useMemo(() => {
@@ -134,6 +136,10 @@ export function UtilityPage({ mod }: { mod: Module }) {
           </div>
         </div>
 
+        <CasesPanel id={mod.id} m={scratch} values={values} defaults={defaults} setValues={setValues} metrics={[
+          ['Equity value at target IRR (C$m)', x => fmt(x.scalar.eq_value)], ['Implied EV / rate base', x => fmt(x.scalar.ev_rb, 'x')], ['Implied P / E', x => fmt(x.scalar.pe, 'x')],
+          ['IRR at entry multiple', x => fmt(x.scalar.equity_irr, 'pct')], ['Average earned ROE', x => fmt(x.scalar.avg_roe, 'pct')], ['Rate base growth', x => fmt(x.scalar.rb_cagr, 'pct')],
+        ]} />
         <ChecksCard mod={mod} res={res} />
         <MemoCard title={mod.name} sub={`C$ millions, nominal. ${mod.blurb}`} body={() => {
           const p0 = planCols[0], pN = planCols.at(-1)!;

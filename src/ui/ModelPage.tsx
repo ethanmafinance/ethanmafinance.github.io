@@ -1,4 +1,5 @@
 import { MemoCard, pfMemo } from './Memo.tsx';
+import { CasesPanel, type Metric } from './Cases.tsx';
 import { useDeferredValue, useMemo, useState } from 'react';
 import { Model, type Fmt, type Input, type ModelDef, type Results, type Source } from '../engine/sheet.ts';
 import { projectFinance, type Module } from '../engine/projectFinance.ts';
@@ -186,6 +187,10 @@ export function ModelPage({ mod }: { mod: Module }) {
           </div>
         </div>
 
+        <CasesPanel id={mod.id} m={scratch} values={values} defaults={defaults} setValues={setValues} metrics={[
+          ...(mod.noEntry ? [['Equity value at 8% (C$m)', (x: Results) => fmt(equityValue(x, 0.08))] as Metric] : [['Equity IRR', (x: Results) => fmt(x.scalar.equity_irr, 'pct')], ['Project IRR', (x: Results) => fmt(x.scalar.project_irr, 'pct')], ['Equity MOIC', (x: Results) => fmt(x.scalar.moic, 'x')]] as Metric[]),
+          ['Senior debt (C$m)', x => fmt(x.scalar.debt)], ['Min DSCR', x => fmt(x.scalar.min_dscr, 'x')], ['Average DSCR', x => fmt(x.scalar.avg_dscr, 'x')], ['LLCR', x => fmt(x.scalar.llcr, 'x')],
+        ]} />
         <StressPanel m={scratch} v={deferred} noEntry={!!mod.noEntry} />
         {!mod.noEntry && <PensionLens m={scratch} v={values} res={res} />}
         <ValuationPanel m={scratch} v={values} res={res} bid={mod.noEntry ? undefined : mod.bid} bidText={mod.bidText} onApply={(id, x) => setValues(v => ({ ...v, [id]: +x.toFixed(2) }))} />
