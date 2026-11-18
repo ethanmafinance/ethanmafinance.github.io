@@ -29,6 +29,8 @@ export type Module = {
   // Set when the example is an operating asset whose entry price is not public: the page shows equity value at a
   // buyer's target IRR in place of IRR, MOIC and the bid solver. The text says why.
   noEntry?: string;
+  // Financial close date of the example, for the credit spread over the GoC long bond on that day.
+  closeDate?: string;
 };
 
 const g = (group: string, list: Omit<Input, 'group'>[]): Input[] => list.map(i => ({ ...i, group }));

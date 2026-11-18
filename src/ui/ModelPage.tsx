@@ -5,7 +5,7 @@ import { Model, type Fmt, type Input, type ModelDef, type Results, type Source }
 import { projectFinance, type Module } from '../engine/projectFinance.ts';
 
 import { BarChart, LineChart, Tornado, Waterfall } from './Charts.tsx';
-import { equityValue, PensionLens, StressPanel, ValuationPanel } from './Analysis.tsx';
+import { equityValue, PensionLens, RatesPanel, StressPanel, ValuationPanel } from './Analysis.tsx';
 
 export const fmt = (v: number, f: Fmt | 'num' = 'num') => {
   if (!Number.isFinite(v)) return 'n/a';
@@ -205,6 +205,7 @@ export function ModelPage({ mod }: { mod: Module }) {
           ['Senior debt (C$m)', x => fmt(x.scalar.debt)], ['Min DSCR', x => fmt(x.scalar.min_dscr, 'x')], ['Average DSCR', x => fmt(x.scalar.avg_dscr, 'x')], ['LLCR', x => fmt(x.scalar.llcr, 'x')],
         ]} />
         <StressPanel m={scratch} v={deferred} noEntry={!!mod.noEntry} />
+        {mod.closeDate && <RatesPanel m={scratch} v={values} closeDate={mod.closeDate} onApply={x => setValues(v => ({ ...v, rate: x }))} />}
         {!mod.noEntry && <PensionLens m={scratch} v={values} res={res} />}
         <ValuationPanel m={scratch} v={values} res={res} bid={mod.noEntry ? undefined : mod.bid} bidText={mod.bidText} onApply={(id, x) => setValues(v => ({ ...v, [id]: +x.toFixed(2) }))} />
 

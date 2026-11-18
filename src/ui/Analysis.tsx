@@ -1,9 +1,9 @@
 // Analyst panels built on the model: downside cases and breakevens, pension lens,
 // secondary-market equity value, and the bid solver. Each runs the same spreadsheet
 // model with some inputs changed; nothing here uses separate formulas for the cash flows.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Model, Results } from '../engine/sheet.ts';
-import { last, useMarket } from '../data/boc.ts';
+import { last, useMarket, VALET } from '../data/boc.ts';
 import { fmt } from './ModelPage.tsx';
 
 type V = Record<string, number>;
@@ -172,6 +172,50 @@ export function ValuationPanel({ m, v, res, bid, bidText, onApply }: { m: Model;
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Rates today: the deal's credit spread over the GoC long bond on its close date, applied to today's GoC long yield.
+// Debt is re-sized at the new rate, as at a bid, so this answers "what would this deal return if it closed today".
+export function RatesPanel({ m, v, closeDate, onApply }: { m: Model; v: V; closeDate: string; onApply: (x: number) => void }) {
+  const market = useMarket();
+  const [atClose, setAtClose] = useState<{ d: string; v: number } | null>();
+  useEffect(() => {
+    const from = new Date(Date.parse(closeDate) - 7 * 864e5).toISOString().slice(0, 10); // last trading day on or before close
+    fetch(`${VALET}/observations/BD.CDN.LONG.DQ.YLD/json?start_date=${from}&end_date=${closeDate}`)
+      .then(r => r.json()).then(j => { const o = j.observations.at(-1); setAtClose(o ? { d: o.d, v: +o['BD.CDN.LONG.DQ.YLD'].v / 100 } : null); })
+      .catch(() => setAtClose(null));
+  }, [closeDate]);
+  const now = market.data ? last(market.data.daily, market.data.daily.ylong) : undefined;
+  const ready = atClose && now;
+  const spread = ready ? v.rate - atClose.v : 0, today = ready ? now.v / 100 + spread : 0;
+  const out = useMemo(() => {
+    if (!ready) return undefined;
+    const a = run(m, v, {}).scalar, b = run(m, v, { rate: today }).scalar; m.set(v);
+    return { a, b };
+  }, [m, v, ready, today]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="card">
+      <h2>Rates today</h2>
+      {atClose === null || market.error ? <p className="note">Bank of Canada data could not be loaded, so this card is not shown.</p>
+        : !ready || !out ? <p className="note">Loading Government of Canada yields from the Bank of Canada...</p> : (
+          <>
+            <div className="scroll-x"><table>
+              <thead><tr><th></th><th>At financial close ({atClose.d})</th><th>Today ({now.d})</th></tr></thead>
+              <tbody>
+                <tr><td>GoC long-term bond yield</td><td>{(atClose.v * 100).toFixed(2)}%</td><td>{now.v.toFixed(2)}%</td></tr>
+                <tr><td>Credit spread (deal rate less GoC long)</td><td>{Math.round(spread * 1e4)} bp</td><td>{Math.round(spread * 1e4)} bp (held)</td></tr>
+                <tr><td>All-in interest rate</td><td>{(v.rate * 100).toFixed(2)}%</td><td>{(today * 100).toFixed(2)}%</td></tr>
+                <tr><td>Senior debt (C$m)</td><td>{fmt(out.a.debt)}</td><td>{fmt(out.b.debt)}</td></tr>
+                <tr><td>Equity IRR</td><td>{fmt(out.a.equity_irr, 'pct')}</td><td>{fmt(out.b.equity_irr, 'pct')}</td></tr>
+                <tr><td>Equity MOIC</td><td>{fmt(out.a.moic, 'x')}</td><td>{fmt(out.b.moic, 'x')}</td></tr>
+              </tbody>
+            </table></div>
+            <button className="btn" style={{ marginTop: 10 }} onClick={() => onApply(+today.toFixed(5))}>Use today's rate in the model</button>
+          </>
+        )}
+      <p className="note">Yields are the Bank of Canada GoC long-term benchmark (series BD.CDN.LONG.DQ.YLD), fetched live. The deal's spread at close is held constant, and the debt is re-sized at the new rate on the same DSCR and gearing tests, as a bidder would see it today. Revenue and costs are unchanged, so this isolates the rate effect. Where the deal rate is marked est. in the inputs, the spread is an estimate too.</p>
     </div>
   );
 }

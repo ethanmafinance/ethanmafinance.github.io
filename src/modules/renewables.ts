@@ -80,6 +80,7 @@ export const renewables: Module = {
     row('opex_r', 'Operating costs', 'C$m', 'num', x => `${x.r('ops_flag')}*${x.i('opex')}*${x.r('index')}`, { role: 'opex' }),
     row('lc_r', 'Major maintenance capex', 'C$m', 'num', x => `${x.r('ops_flag')}*${x.i('lifecycle_r')}*${x.r('index')}`, { role: 'maint' }),
   ],
+  closeDate: '2015-10-22',
   bid: { input: 'ppa_price', label: 'contract price' },
   bidText: 'In a competitive power procurement, bidders compete on the contract price per MWh.',
 };

@@ -65,6 +65,7 @@ export const p3: Module = {
     r('spv_row', 'Project company costs', 'opex', x => `${x.r('ops_flag')}*${x.i('spv_cost')}*${x.r('index')}`),
     r('lc_row', 'Lifecycle capex', 'maint', x => `${x.r('ops_flag')}*${x.i('lifecycle')}*${x.r('index')}`),
   ],
+  closeDate: '2011-09-26',
   bid: { input: 'ap_capital', label: 'capital availability payment' },
   checks: [
     { label: 'Average annual service payment', published: 53.9, fmt: 'num', source: 'IO report p. 14',
