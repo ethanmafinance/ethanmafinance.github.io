@@ -143,3 +143,30 @@ export function Tornado({ rows, base, fmt }: { rows: { label: string; lo: number
     </>
   );
 }
+
+// Waterfall: horizontal steps from the first total to the last; steps are signed amounts, totals restart from zero.
+export function Waterfall({ steps, fmt }: { steps: { label: string; value: number; total?: boolean }[]; fmt: (v: number) => string }) {
+  let run = 0;
+  const bars = steps.filter(st => st.total || Math.abs(st.value) >= 0.05).map(st => { const a = st.total ? 0 : run, b = st.total ? st.value : run + st.value; run = b; return { ...st, a, b }; });
+  const ext = Math.max(1e-9, ...bars.flatMap(b => [Math.abs(b.a), Math.abs(b.b)]));
+  const lo = Math.min(0, ...bars.flatMap(b => [b.a, b.b]));
+  const rowH = 28, LW = 200, PW = 330, w = LW + PW + 90, h = bars.length * rowH + 8;
+  const x = (v: number) => LW + ((v - lo) / (ext - lo)) * PW;
+  return (
+    <div className="chart">
+      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Cash flow waterfall">
+        <line x1={x(0)} x2={x(0)} y1={0} y2={h} stroke="var(--ref)" />
+        {bars.map((b, k) => {
+          const y = 4 + k * rowH, x0 = Math.min(x(b.a), x(b.b)), wd = Math.max(1, Math.abs(x(b.b) - x(b.a)));
+          return (
+            <g key={b.label}>
+              <text x={0} y={y + rowH / 2 + 2} fontSize={12} fill="var(--text)" fontWeight={b.total ? 700 : 400}>{b.label}</text>
+              <rect x={x0} y={y + 4} width={wd} height={rowH - 10} rx={2} fill={b.total ? 'var(--series-1)' : b.value < 0 ? 'var(--series-2)' : 'var(--series-3, var(--series-1))'} opacity={b.total ? 1 : 0.85} />
+              <text x={x0 + wd + 6} y={y + rowH / 2 + 2} fontSize={11} fill="var(--text-2)">{fmt(b.value)}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}

@@ -4,7 +4,7 @@ import { useDeferredValue, useMemo, useState } from 'react';
 import { Model, type Fmt, type Input, type ModelDef, type Results, type Source } from '../engine/sheet.ts';
 import { projectFinance, type Module } from '../engine/projectFinance.ts';
 
-import { BarChart, LineChart, Tornado } from './Charts.tsx';
+import { BarChart, LineChart, Tornado, Waterfall } from './Charts.tsx';
 import { equityValue, PensionLens, StressPanel, ValuationPanel } from './Analysis.tsx';
 
 export const fmt = (v: number, f: Fmt | 'num' = 'num') => {
@@ -184,6 +184,19 @@ export function ModelPage({ mod }: { mod: Module }) {
           <div className="card">
             <h2>Equity cash flow</h2>
             <BarChart xs={years} fmt={v => fmt(v)} series={{ name: 'Equity cash flow', values: r.equity_cf, color: 'var(--series-1)' }} />
+          </div>
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
+            <h2>Cash flow waterfall, operations {opsYears[0]} to {opsYears.at(-1)} (C$m, nominal)</h2>
+            {(() => {
+              const t = (a: number[]) => pick(a).reduce((x, y) => x + (Number.isFinite(y) ? y : 0), 0);
+              const cfads = t(r.cfads), int = t(r.int_paid), prin = t(r.principal), dist = t(r.dist);
+              return <Waterfall fmt={v => fmt(v)} steps={[
+                { label: 'Revenue', value: t(r.revenue), total: true }, { label: 'Operating costs', value: -t(r.opex) }, { label: 'Maintenance and lifecycle', value: -t(r.maint) }, { label: 'Cash tax', value: -t(r.l_tax) },
+                { label: 'CFADS', value: cfads, total: true }, { label: 'Interest', value: -int }, { label: 'Principal', value: -prin }, { label: 'Reserves and lock-up, net', value: dist - (cfads - int - prin) },
+                { label: 'Distributions to equity', value: dist, total: true },
+              ]} />;
+            })()}
+            <p className="note">Totals over the operating years. Reserves and lock-up net out the DSRA and any cash trapped by the lock-up test.</p>
           </div>
         </div>
 
