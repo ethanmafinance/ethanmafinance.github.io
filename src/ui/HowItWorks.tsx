@@ -87,6 +87,8 @@ export function HowItWorks() {
 
       <p><b>Public vs private:</b> the utility page sets the listed market's price for rate base (Fortis enterprise value at today's share price over its published 2025 mid-year rate base) against this model's value at a private target IRR, and shows the IRR a private buyer earns paying the listed multiple. The data centre page sets the portfolio's private value over next year's NOI against listed data centre owners' EV / EBITDA. Both are references, not like-for-like prices: listed companies carry growth, holding company debt and other businesses.</p>
 
+      <p><b>Currency view:</b> for a US dollar asset, the cash flows are converted to Canadian dollars at the Bank of Canada spot rate. Unhedged, they move with the exchange rate path chosen. Hedged, each year's cash flow is sold forward at spot x ((1 + GoC 10-year yield) / (1 + US Treasury 10-year yield))^years, which is covered interest parity with long yields standing in for the forward curve. When Canadian yields are below US yields, a hedge costs the yield gap each year.</p>
+
       <h2>14. Equities: DCF from SEC filings</h2>
       <ul>
         <li><b>Data:</b> a script reads each company's annual 10-K, 20-F or 40-F figures from SEC EDGAR XBRL data, the latest close and five years of monthly prices from Yahoo Finance, and the 10-year risk-free rate (US Treasury, or Government of Canada for companies that report in Canadian dollars). Every reported figure links to the filing it came from. Companies whose XBRL data is stale or incomplete are left out rather than shown with gaps.</li>

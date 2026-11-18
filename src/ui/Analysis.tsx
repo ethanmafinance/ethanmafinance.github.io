@@ -18,7 +18,7 @@ export function solve(f: (x: number) => number, target: number, lo: number, hi: 
   }
   return (lo + hi) / 2;
 }
-const irr = (cf: number[]) => solve(r => cf.reduce((a, c, t) => a + c / (1 + r) ** t, 0), 0, -0.99, 1, 80);
+export const irr = (cf: number[]) => solve(r => cf.reduce((a, c, t) => a + c / (1 + r) ** t, 0), 0, -0.99, 1, 80);
 // Value of 100% of the equity at financial close: distributions after the close year discounted at the buyer's target IRR.
 export const equityValue = (res: Results, rate: number) => res.row.equity_cf.slice(1).reduce((a, c, t) => a + c / (1 + rate) ** (t + 1), 0);
 const count = (a: number[], f: (v: number) => boolean) => a.filter(v => Number.isFinite(v) && f(v)).length;

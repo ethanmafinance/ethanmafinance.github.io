@@ -2,7 +2,9 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { comp, median, type Comp } from '../engine/comps.ts';
 import type { Company } from '../engine/dcf.ts';
-import { DATA } from './EquityPage.tsx';
+import { DATA, loadIndex } from './EquityPage.tsx';
+import { irr } from './Analysis.tsx';
+import { VALET } from '../data/boc.ts';
 import { Model } from '../engine/sheet.ts';
 import { lease } from '../engine/lease.ts';
 import type { Module } from '../engine/projectFinance.ts';
@@ -108,6 +110,7 @@ export function DigitalPage({ mod }: { mod: Module }) {
         </div>
 
         <PublicPrivate value={s.value} noi1={r.noi[1]} />
+        <CurrencyCard cf={r.cf} usdIrr={s.irr} />
         <CasesPanel id={mod.id} m={scratch} values={values} defaults={defaults} setValues={setValues} metrics={[
           ['Portfolio value (US$m)', x => fmt(x.scalar.value)], ['Going-in yield', x => fmt(x.scalar.going_in, 'pct')], ['Value per MW (US$m)', x => fmt(x.scalar.per_mw)],
           ['Exit value share', x => fmt(x.scalar.tv_share, 'pct')], ['IRR at the price', x => fmt(x.scalar.irr, 'pct')],
@@ -176,6 +179,37 @@ function PublicPrivate({ value, noi1 }: { value: number; noi1: number }) {
         </table></div>
       )}
       <p className="note">Listed figures from each company's latest annual SEC filing and closing price, with the same enterprise value bridge as the equity pages. The comparison is indicative: the listed multiple is on trailing EBITDA after corporate costs and includes development pipelines, interconnection and global platforms; the private multiple is on next year's property NOI for stabilized, leased capacity.</p>
+    </div>
+  );
+}
+
+// Currency view for a Canadian investor: the asset's US$ cash flows converted to C$, unhedged at an assumed path for
+// the exchange rate, or hedged with forwards priced by covered interest parity on 10-year government yields.
+type Rf = { value: number; date: string };
+function CurrencyCard({ cf, usdIrr }: { cf: number[]; usdIrr: number }) {
+  const [mk, setMk] = useState<{ spot: { v: number; d: string }; usd: Rf; cad: Rf } | null>();
+  const [hedge, setHedge] = useState(1);
+  useEffect(() => {
+    Promise.all([fetch(`${VALET}/observations/FXUSDCAD/json?recent=1`).then(r => r.json()), loadIndex()])
+      .then(([fx, idx]) => { const o = fx.observations.at(-1); setMk({ spot: { v: +o.FXUSDCAD.v, d: o.d }, usd: idx.rf.USD, cad: idx.rf.CAD }); })
+      .catch(() => setMk(null));
+  }, []);
+  if (mk === null) return <div className="card"><h2>Currency view (C$ investor)</h2><p className="note">Exchange rate or yield data could not be loaded.</p></div>;
+  if (!mk) return <div className="card"><h2>Currency view (C$ investor)</h2><p className="note">Loading the Bank of Canada exchange rate...</p></div>;
+  const fwd = (t: number) => ((1 + mk.cad.value) / (1 + mk.usd.value)) ** t;
+  const cadIrr = (drift: number) => irr(cf.map((c, t) => c * mk.spot.v * (hedge * fwd(t) + (1 - hedge) * (1 + drift) ** t)));
+  const paths: [string, number][] = [['US$ falls 2% a year against C$', -0.02], ['Exchange rate unchanged', 0], ['US$ rises 2% a year against C$', 0.02]];
+  return (
+    <div className="card">
+      <h2>Currency view (C$ investor)</h2>
+      <div className="seg" role="group" aria-label="Hedge ratio" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+        {[0, 0.5, 1].map(h => <button key={h} className={`btn${hedge === h ? ' primary' : ''}`} onClick={() => setHedge(h)}>{h === 0 ? 'Unhedged' : `${h * 100}% hedged`}</button>)}
+      </div>
+      <div className="scroll-x"><table>
+        <thead><tr><th>Exchange rate path</th><th>IRR in C$</th><th>vs US$ IRR {fmt(usdIrr, 'pct')}</th></tr></thead>
+        <tbody>{paths.map(([l, d]) => { const x = cadIrr(d); return <tr key={l}><td>{l}{hedge === 1 ? ' (hedged: no effect)' : ''}</td><td>{fmt(x, 'pct')}</td><td>{x >= usdIrr ? '+' : ''}{((x - usdIrr) * 1e4).toFixed(0)} bp</td></tr>; })}</tbody>
+      </table></div>
+      <p className="note">Spot US$1 = C${mk.spot.v.toFixed(4)} ({mk.spot.d}, Bank of Canada). Hedged cash flows are sold forward at spot x ((1 + GoC 10-year {fmt(mk.cad.value, 'pct')}) / (1 + US Treasury 10-year {fmt(mk.usd.value, 'pct')}))^years, covered interest parity, so with Canadian yields below US yields a full hedge costs about {((mk.usd.value - mk.cad.value) * 100).toFixed(1)}pt a year. This uses long yields as a proxy for the forward curve and ignores hedge margin and rollover costs. Unhedged returns move with the exchange rate path shown.</p>
     </div>
   );
 }
