@@ -13,7 +13,7 @@ import { SaveButton } from './Saved.tsx';
 import { comp, GROUPS, groupOf, impliedPerShare, median, type Comp } from '../engine/comps.ts';
 
 type V = Record<string, number>;
-export type Listing = { ticker: string; name: string; currency: string };
+export type Listing = { ticker: string; name: string; currency: string; f?: number };
 export const DATA = './data/eq/';
 
 let indexCache: Promise<{ generated: string; tickers: Listing[] }> | undefined;
@@ -60,7 +60,7 @@ export function EquityStart({ prefill = '' }: { prefill?: string }) {
           <datalist id="eq-tickers">{list?.map(l => <option key={l.ticker} value={l.ticker}>{l.name}</option>)}</datalist>
         </label>
         <div className="note">
-          {err ? 'The company list could not load.' : !list ? 'Loading the company list...' : known ? `${known.name}, reports in ${known.currency}.` : t ? `${t} is not covered yet. ${list.length} companies are covered, all SEC filers.` : `${list.length} companies covered, all SEC filers, including Canadian companies that file 40-F reports.`}
+          {err ? 'The company list could not load.' : !list ? 'Loading the company list...' : known ? `${known.name}, reports in ${known.currency}.` : t ? `${t} is not covered. Coverage is NYSE and Nasdaq companies that file annual reports with the SEC (${list.length.toLocaleString('en-CA')} companies), excluding banks and insurers; TSX-only companies are not included.` : `${list.length.toLocaleString('en-CA')} companies covered: NYSE and Nasdaq SEC filers, including Canadian companies that file 40-F reports.`}
         </div>
         {QUESTIONS.map(qn => (
           <fieldset key={qn.key} className="eq-q">
@@ -80,8 +80,9 @@ export function EquityStart({ prefill = '' }: { prefill?: string }) {
       </form>
       {list && (
         <div className="card">
-          <h2>Covered companies</h2>
-          <ul className="chips eq-list">{list.map(l => <li key={l.ticker}><a href={hrefOf(l.ticker, a)} title={l.name}>{l.ticker}</a></li>)}</ul>
+          <h2>Infrastructure and large-cap companies</h2>
+          <p className="note">A starting list. Any ticker in the {list.length.toLocaleString('en-CA')} covered companies works in the box above.</p>
+          <ul className="chips eq-list">{(list.length > 100 ? list.filter(l => l.f) : list).map(l => <li key={l.ticker}><a href={hrefOf(l.ticker, a)} title={l.name}>{l.ticker}</a></li>)}</ul>
         </div>
       )}
     </>

@@ -4,14 +4,16 @@
 //   US Treasury daily par yield curve and Bank of Canada Valet (10-year risk-free rates).
 // The site is static and neither SEC nor Yahoo allow browser requests, so this runs ahead of time
 // (locally or in the scheduled GitHub Action) and the site reads the JSON.
-// Usage: node scripts/equities.mjs [TICKER ...]   (no tickers = the UNIVERSE list below)
+// Usage: node scripts/equities.mjs [TICKER ...] [--all] [--limit=N]   (no tickers = the UNIVERSE list below)
+// Env: FACTS_ZIP = path to SEC companyfacts.zip (bulk, used by the daily job); OUT_DIR = write somewhere other than public/data/eq.
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 
 // SEC asks automated clients for a name and contact email in the User-Agent; set SEC_UA to your own.
 const UA = process.env.SEC_UA || 'infrastructure-investment-modeling-platform contact@example.com';
-const OUT = new URL('../public/data/eq/', import.meta.url);
+const OUT = process.env.OUT_DIR ? new URL(`file:///${process.env.OUT_DIR.replace(/\\/g, '/').replace(/\/?$/, '/')}`) : new URL('../public/data/eq/', import.meta.url);
 
-// ponytail: curated list, not every SEC filer. Widen with the SEC bulk companyfacts.zip if coverage matters.
+// Curated list (always built first). With --all, every other NYSE and Nasdaq SEC filer is added, one ticker per company.
 export const UNIVERSE = [
   // Canadian infrastructure and utilities that file with the SEC
   'ENB', 'TRP', 'PBA', 'FTS', 'CP', 'BN', 'TU',
@@ -83,26 +85,43 @@ const firstSeries = (facts, list, cur, instant) => { for (const c of list) { con
 
 const link = (cik, accn) => `https://www.sec.gov/Archives/edgar/data/${cik}/${accn.replace(/-/g, '')}/`;
 
-async function yahoo(sym, range, interval) {
-  const d = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}`);
-  const r = d.chart.result[0];
-  const close = r.indicators.adjclose?.[0]?.adjclose ?? r.indicators.quote[0].close;
-  return { meta: r.meta, t: r.timestamp.map(s => new Date(s * 1000).toISOString().slice(0, 10)), close };
+// Prices: Yahoo spark endpoint, up to 20 symbols a call, 5 years of monthly closes (split-adjusted, not dividend-adjusted).
+async function spark(symbols) {
+  const out = {};
+  for (let i = 0; i < symbols.length; i += 20) {
+    const chunk = symbols.slice(i, i + 20);
+    try {
+      const d = await get(`https://query1.finance.yahoo.com/v7/finance/spark?symbols=${chunk.map(encodeURIComponent).join(',')}&range=5y&interval=1mo`);
+      for (const r of d.spark?.result ?? []) {
+        const x = r.response?.[0];
+        if (!x?.timestamp || !x.meta?.regularMarketPrice) continue;
+        out[r.symbol] = { meta: x.meta, t: x.timestamp.map(s => new Date(s * 1000).toISOString().slice(0, 10)), close: x.indicators.quote[0].close };
+      }
+    } catch (e) { console.log(`prices failed for ${chunk.join(',')}: ${e.message}`); }
+    await sleep(400);
+  }
+  return out;
 }
 
-// Beta: slope of 60 monthly returns on the stock against the local index (S&P 500 or S&P/TSX Composite).
-async function beta(sym, index) {
-  const [a, b] = await Promise.all([yahoo(sym, '5y', '1mo'), yahoo(index, '5y', '1mo')]);
+// Beta: slope of 60 monthly price returns on the stock against the local index (S&P 500 or S&P/TSX Composite).
+function beta(a, b, index) {
   const ib = Object.fromEntries(b.t.map((t, k) => [t.slice(0, 7), b.close[k]]));
   const pairs = a.t.map((t, k) => [a.close[k], ib[t.slice(0, 7)]]).filter(([x, y]) => x != null && y != null);
-  // Drop the current, incomplete month.
-  pairs.pop();
+  pairs.pop(); // drop the current, incomplete month
   const ra = [], rb = [];
   for (let k = 1; k < pairs.length; k++) { ra.push(pairs[k][0] / pairs[k - 1][0] - 1); rb.push(pairs[k][1] / pairs[k - 1][1] - 1); }
-  const n = ra.length, ma = ra.reduce((s, v) => s + v, 0) / n, mb = rb.reduce((s, v) => s + v, 0) / n;
+  const n = ra.length;
+  if (n < 24) throw new Error(`only ${n} months of prices for beta`);
+  const ma = ra.reduce((s, v) => s + v, 0) / n, mb = rb.reduce((s, v) => s + v, 0) / n;
   let cov = 0, vb = 0;
   for (let k = 0; k < n; k++) { cov += (ra[k] - ma) * (rb[k] - mb); vb += (rb[k] - mb) ** 2; }
-  return { value: +(cov / vb).toFixed(3), months: n, index, from: a.t[0].slice(0, 7), to: a.t.at(-2).slice(0, 7) };
+  return { value: +(cov / vb).toFixed(3), months: n, index, from: a.t[0].slice(0, 7), to: a.t.at(-2).slice(0, 7), basis: 'monthly price returns' };
+}
+
+// Company facts: from the SEC bulk file when FACTS_ZIP points at companyfacts.zip (the daily job), else the API.
+async function factsOf(cik) {
+  if (process.env.FACTS_ZIP) return JSON.parse(execFileSync('unzip', ['-p', process.env.FACTS_ZIP, `CIK${cik}.json`], { maxBuffer: 1 << 30 }).toString());
+  return get(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`);
 }
 
 async function rates() {
@@ -119,11 +138,16 @@ async function rates() {
   };
 }
 
-async function build(ticker, cikOf, rf) {
+// Step 1 (no prices): everything from the filings. Returns the record and the Yahoo symbol to price it on.
+async function build(ticker, cikOf) {
   const co = cikOf[ticker];
   if (!co) throw new Error('not an SEC filer');
   const cik = String(co.cik_str).padStart(10, '0');
-  const { facts, entityName } = await get(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`);
+  const { facts, entityName } = await factsOf(cik);
+  if (!facts) throw new Error('no XBRL facts');
+  // Banks and insurers: an unlevered DCF does not fit them.
+  const BANK = { 'us-gaap': ['InterestExpenseDeposits', 'NoninterestIncome', 'PremiumsEarnedNet', 'PolicyholderBenefitsAndClaimsIncurredNet'], 'ifrs-full': ['DepositsFromBanks', 'DepositsFromCustomers', 'InsuranceContractsThatAreLiabilities', 'LiabilitiesArisingFromInsuranceContracts'] };
+  if (Object.entries(BANK).some(([ns, list]) => list.some(c => facts[ns]?.[c]))) throw new Error('bank or insurer');
   // Reporting currency: the unit revenue is tagged in.
   const revConcept = FLOW.rev.find(c => facts['us-gaap']?.[c] || facts['ifrs-full']?.[c]);
   const cur = Object.keys((facts['us-gaap']?.[revConcept] ?? facts['ifrs-full']?.[revConcept])?.units ?? {})[0];
@@ -171,40 +195,54 @@ async function build(ticker, cikOf, rf) {
   if (!shares && dilLast) shares = { v: +(dilLast.val / 1e6).toFixed(3), asOf: lastEnd, concept: dilLast.concept + ' (diluted weighted average)', form: dilLast.form, url: link(co.cik_str, dilLast.accn) };
   if (!shares) throw new Error('no share count');
 
-  // Price in the reporting currency: TSX listing for CAD reporters, US listing otherwise.
   const sym = cur === 'CAD' ? `${TSX[ticker] ?? ticker.replace(/-/g, '.')}.TO` : ticker.replace(/\./g, '-');
-  const q = await yahoo(sym, '5d', '1d');
-  if (q.meta.currency !== cur) throw new Error(`price in ${q.meta.currency}, filings in ${cur}`);
-  const k = q.close.findLastIndex(v => v != null);
-  const price = { v: +q.close[k].toFixed(4), date: q.t[k], symbol: sym, exchange: q.meta.fullExchangeName };
-  const b = await beta(sym, cur === 'CAD' ? '^GSPTSE' : '^GSPC');
-
-  return {
-    ticker, name: entityName, cik: co.cik_str, currency: cur, fyEnds: ends, hist, bal, shares, price, beta: b,
-    rf: rf[cur], generated: new Date().toISOString().slice(0, 10),
-  };
+  return { sym, rec: { ticker, name: entityName, cik: co.cik_str, currency: cur, fyEnds: ends, hist, bal, shares } };
 }
 
-const tickers = process.argv.slice(2).map(t => t.toUpperCase());
-const list = tickers.length ? tickers : UNIVERSE;
+// Step 2: price and beta from the spark data, in the reporting currency.
+function priced({ sym, rec }, px, rf) {
+  const q = px[sym];
+  if (!q) throw new Error(`no price for ${sym}`);
+  if (q.meta.currency !== rec.currency) throw new Error(`price in ${q.meta.currency}, filings in ${rec.currency}`);
+  const index = rec.currency === 'CAD' ? '^GSPTSE' : '^GSPC';
+  const price = { v: +q.meta.regularMarketPrice.toFixed(4), date: new Date(q.meta.regularMarketTime * 1000).toISOString().slice(0, 10), symbol: sym, exchange: q.meta.fullExchangeName };
+  return { ...rec, price, beta: beta(q, px[index], index), rf: rf[rec.currency], generated: new Date().toISOString().slice(0, 10) };
+}
+
+const args = process.argv.slice(2);
+const all = args.includes('--all');
+const limit = +(args.find(x => x.startsWith('--limit='))?.slice(8) ?? 0);
+const tickers = args.filter(x => !x.startsWith('--')).map(t => t.toUpperCase());
 const cikOf = Object.fromEntries(Object.values(await get('https://www.sec.gov/files/company_tickers.json')).map(c => [c.ticker, c]));
+let list = tickers.length ? tickers : UNIVERSE;
+if (all) {
+  const ex = await get('https://www.sec.gov/files/company_tickers_exchange.json');
+  const seen = new Set(UNIVERSE.map(t => cikOf[t]?.cik_str));
+  const more = [];
+  for (const [cik, , ticker, exchange] of ex.data) if (['NYSE', 'Nasdaq'].includes(exchange) && !seen.has(cik) && cikOf[ticker]) { seen.add(cik); more.push(ticker); }
+  list = [...UNIVERSE, ...more];
+}
+if (limit) list = list.slice(0, limit);
 const rf = await rates();
 await mkdir(OUT, { recursive: true });
-const index = [], skipped = [];
+const built = [], skipped = [];
 for (const t of list) {
-  try {
-    const d = await build(t, cikOf, rf);
-    await writeFile(new URL(`${t}.json`, OUT), JSON.stringify(d));
-    index.push({ ticker: t, name: d.name, currency: d.currency });
-    console.log(`ok   ${t} ${d.currency} ${d.fyEnds.at(-1)} price ${d.price.v} beta ${d.beta.value}`);
-  } catch (e) {
-    console.log(`skip ${t}: ${e.message}`);
-    skipped.push(t);
-    await rm(new URL(`${t}.json`, OUT), { force: true }); // never leave stale data for a ticker that now fails
-  }
-  await sleep(250); // stay well under SEC's 10 requests a second
+  try { built.push(await build(t, cikOf)); } catch (e) { skipped.push(t); if (!all) console.log(`skip ${t}: ${e.message}`); }
+  if (!process.env.FACTS_ZIP) await sleep(150); // stay under SEC's 10 requests a second
 }
-// Merge with tickers already built so a partial run keeps the rest of the list.
+const px = await spark([...new Set([...built.map(b => b.sym), '^GSPC', '^GSPTSE'])]);
+const index = [];
+for (const b of built) {
+  try {
+    const d = priced(b, px, rf);
+    await writeFile(new URL(`${d.ticker}.json`, OUT), JSON.stringify(d));
+    index.push({ ticker: d.ticker, name: d.name, currency: d.currency, ...(UNIVERSE.includes(d.ticker) ? { f: 1 } : {}) });
+    if (!all) console.log(`ok   ${d.ticker} ${d.currency} ${d.fyEnds.at(-1)} price ${d.price.v} beta ${d.beta.value}`);
+  } catch (e) { skipped.push(b.rec.ticker); if (!all) console.log(`skip ${b.rec.ticker}: ${e.message}`); }
+}
+for (const t of skipped) await rm(new URL(`${t}.json`, OUT), { force: true }); // never leave stale data for a ticker that now fails
+console.log(`built ${index.length}, skipped ${skipped.length} of ${list.length}`);
+// A partial run (named tickers) keeps the rest of the existing list.
 let old = [];
 if (tickers.length) try { old = JSON.parse(await readFile(new URL('index.json', OUT), 'utf8')).tickers; } catch {}
 const merged = [...old.filter(o => !index.some(n => n.ticker === o.ticker) && !skipped.includes(o.ticker)), ...index].sort((a, b) => a.ticker.localeCompare(b.ticker));
