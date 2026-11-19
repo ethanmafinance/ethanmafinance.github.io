@@ -36,6 +36,8 @@ export const regulatedInputs: Input[] = [
     { id: 'roe', label: 'Allowed return on equity', unit: '%', value: 0.0925, fmt: 'pct' },
     { id: 'ltd_rate', label: 'Long-term debt rate', unit: '%', value: 0.045, fmt: 'pct' },
     { id: 'std_rate', label: 'Short-term debt rate', unit: '%', value: 0.05, fmt: 'pct' },
+    { id: 'roe_y1', label: 'Allowed ROE in plan year 1 only, if different (0 = same as later years)', unit: '%', value: 0, fmt: 'pct' },
+    { id: 'std_y1', label: 'Short-term debt rate in plan year 1 only, if different (0 = same as later years)', unit: '%', value: 0, fmt: 'pct' },
   ]),
   ...g('Operating costs, tax and other revenue', [
     { id: 'om_1', label: 'OM&A including property taxes, plan year 1', unit: 'C$m', value: 100, fmt: 'num' },
@@ -99,8 +101,11 @@ export function regulated(mod: Module): ModelDef {
 
     { section: 'Revenue requirement' },
     row('om', 'OM&A including property taxes', 'C$m', 'num', x => `${x.r('op')}*${x.i('om_1')}*(1+${x.i('om_growth')})^MAX(0,${x.r('yr')}-1)`),
-    row('int_deemed', 'Deemed interest (long-term and short-term debt)', 'C$m', 'num', x => `${x.r('rb')}*(${x.i('ltd_share')}*${x.i('ltd_rate')}+${x.i('std_share')}*${x.i('std_rate')})`),
-    row('roe_ret', 'Return on equity (deemed equity x allowed ROE)', 'C$m', 'num', x => `${x.r('rb')}*${x.i('eq_share')}*${x.i('roe')}`),
+    // Year 1 can carry its own rates (e.g. an interim ROE that was final for that year only).
+    row('roe_rate', 'Allowed ROE this year', '%', 'pct', x => `IF(AND(${x.r('yr')}=1,${x.i('roe_y1')}>0),${x.i('roe_y1')},${x.i('roe')})`),
+    row('std_rt', 'Short-term debt rate this year', '%', 'pct', x => `IF(AND(${x.r('yr')}=1,${x.i('std_y1')}>0),${x.i('std_y1')},${x.i('std_rate')})`),
+    row('int_deemed', 'Deemed interest (long-term and short-term debt)', 'C$m', 'num', x => `${x.r('rb')}*(${x.i('ltd_share')}*${x.i('ltd_rate')}+${x.i('std_share')}*${x.r('std_rt')})`),
+    row('roe_ret', 'Return on equity (deemed equity x allowed ROE)', 'C$m', 'num', x => `${x.r('rb')}*${x.i('eq_share')}*${x.r('roe_rate')}`),
     // After the plan, PILs keep the plan's ratio to the return on equity (tax timing differences average out).
     row('cum_pils', 'PILs over the plan, cumulative', 'C$m', 'num', x => `${x.p('cum_pils')}+${x.r('plan_flag')}*${x.r('pils')}`),
     row('cum_roe', 'Return on equity over the plan, cumulative', 'C$m', 'num', x => `${x.p('cum_roe')}+${x.r('plan_flag')}*${x.r('roe_ret')}`),

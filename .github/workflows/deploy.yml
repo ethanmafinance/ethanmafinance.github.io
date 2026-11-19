@@ -6,7 +6,7 @@ on:
   schedule: [{ cron: '30 22 * * 1-5' }] # 22:30 UTC on weekdays, after the US and TSX close
   workflow_dispatch:
 permissions: { contents: read, pages: write, id-token: write }
-concurrency: { group: pages, cancel-in-progress: true }
+concurrency: { group: pages, cancel-in-progress: false } # queue pushes behind a running data refresh instead of cancelling it
 jobs:
   deploy:
     runs-on: ubuntu-latest

@@ -8,13 +8,14 @@ import type { Source } from '../engine/sheet.ts';
 
 const SP: Source = { title: 'Toronto Hydro, Settlement Proposal, EB-2023-0195', date: 'Aug 16, 2024', url: 'https://torontohydro.com/documents/d/guest/settlement-proposal' };
 const DRO: Source = { title: 'Toronto Hydro, Draft Rate Order, EB-2023-0195', date: 'Nov 26, 2024', url: 'https://www.rds.oeb.ca/CMWebDrawer/Record/873331/File/document' };
+const DRO26: Source = { title: 'Ontario Energy Board, Decision and Rate Order, Toronto Hydro 2026 rates, EB-2025-0006', date: 'Dec 11, 2025', url: 'https://www.rds.oeb.ca/CMWebDrawer/Record/925317/File/document' };
 const CRA: Source = { title: 'Canada Revenue Agency, corporation tax rates: federal 15% plus Ontario 11.5%', url: 'https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/corporations/corporation-tax-rates.html' };
 const est = (note: string, base?: Source): Source => ({ ...(base ?? { title: '' }), est: true, note });
 const s = (base: Source, note: string, page?: string): Source => ({ ...base, note, page });
 
 const ISA = [616.3, 639.7, 726.5, 697.5, 778.0];
 const DEP = [286.3, 297.9, 314.0, 332.6, 342.8];
-const PILS = [28.1, 31.4, 20.6, 54.5, 46.4];
+const PILS = [28.1, 29.2, 20.6, 54.5, 46.4];
 const plan = (id: string, vals: number[], src: (k: number) => Source) =>
   Object.fromEntries(vals.map((value, k) => [`${id}_${k + 1}`, { value, source: src(k) }]));
 
@@ -37,12 +38,17 @@ export const utility: Module = {
     eq_share: { value: 0.4, source: s(SP, 'deemed capital structure 40% common equity, 56% long-term debt, 4% short-term debt', '21') },
     ltd_share: { value: 0.56, source: s(SP, 'deemed 56% long-term debt', '21') },
     std_share: { value: 0.04, source: s(SP, 'deemed 4% short-term debt', '21') },
-    roe: { value: 0.0925, source: s(DRO, '2025 OEB-approved ROE of 9.25%, applied to every plan year in the approved revenue requirement', '3') },
-    ltd_rate: { value: 0.0383, source: s(DRO, '2025-2029 long-term debt rate updated from 3.91% to 3.83% for the latest issuances', '3') },
-    std_rate: { value: 0.0504, source: s(DRO, '2025 deemed short-term debt rate 5.04%', '3') },
+    roe: { value: 0.09, source: s(DRO26, 'for 2026-2029 Toronto Hydro updated its ROE to 9.00%, the final 2025 ROE from the generic cost of capital proceeding (EB-2024-0063). Held at 9.00% after the 2030 rebasing (est.): the OEB formula value for 2026 applications is 9.11% (EB-2025-0303, Oct 31, 2025), so this is slightly conservative', '8') },
+    roe_y1: { value: 0.0925, source: s(DRO, '2025 rates used the interim 9.25% ROE, final for 2025 with no true-up (EB-2025-0006, p.8)', '3') },
+    ltd_rate: { value: 0.0383, source: s(DRO, '2025-2029 long-term debt rate updated from 3.91% to 3.83% for the latest issuances; not subject to a variance account (EB-2025-0006, p.8)', '3') },
+    std_rate: { value: 0.0391, source: s(DRO26, 'deemed short-term debt rate finalized at 3.91% for 2026-2029, replacing the interim 5.04%; held after 2029 (est.; the OEB 2026 formula value is 2.72%). Passed through to customers, so it does not move equity value', '8') },
+    std_y1: { value: 0.0504, source: s(DRO, '2025 rates set on the interim deemed short-term debt rate of 5.04%; the variance to 3.91% is tracked in a deferral account', '3') },
     om_1: { value: 323.5, source: s(DRO, '2025 OM&A including property taxes, Table 1', '4') },
     om_growth: { value: 0.0241, source: s(DRO, 'agreed OM&A index of 2.41% (inflation plus OM&A growth factor)', '5') },
-    ...plan('pils', PILS, () => s(DRO, 'approved PILs, Table 1 (from the PILs model, which reflects the timing of tax depreciation)', '4')),
+    ...plan('pils', PILS, k => k === 1
+      ? s(DRO26, '2026 PILs at the 9.00% ROE, Table 4.1', '7')
+      : k === 0 ? s(DRO, 'approved PILs, Table 1 (from the PILs model, which reflects the timing of tax depreciation)', '4')
+        : est('approved PILs from the Nov 2024 draft rate order, set at the 9.25% ROE; the OEB has not republished 2027-2029 PILs at 9.00%, so these slightly overstate revenue. PILs pass through to customers and do not move net income', { ...DRO, page: '4' })),
     tax_rate: { value: 0.265, source: CRA },
     offset_1: { value: 48.2, source: s(DRO, '2025 revenue offsets, Table 1', '4') },
     offset_growth: { value: 0.02, source: s(SP, 'settled other revenue grows from $48.23m in 2025 to $52.21m in 2029, 2.0% a year (Table 15)', '23') },
@@ -63,16 +69,27 @@ utility.checks = [
   { label: 'Rate base, 2025 (opening assets solved to match)', published: 5879.7, fmt: 'num', source: 'Settlement Proposal, Table 7', model: at(2025, 'rb') },
   { label: 'Rate base, 2029', published: 7327.9, fmt: 'num', source: 'Settlement Proposal, Table 7', model: at(2029, 'rb') },
   { label: 'Deemed interest expense, 2025', published: 137.8, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2025, 'int_deemed') },
-  { label: 'Deemed interest expense, 2029', published: 171.8, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'int_deemed') },
+  { label: 'Deemed interest expense, 2029', published: 171.8, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'int_deemed'),
+    info: 'Not used: set at the interim 9.25% ROE and 5.04% short-term debt rate. The OEB updated 2026-2029 to 9.00% and 3.91% (EB-2025-0006, Dec 11, 2025), so this figure is superseded.' },
   { label: 'Return on equity, 2025', published: 217.5, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2025, 'roe_ret') },
-  { label: 'Return on equity, 2029', published: 271.1, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'roe_ret') },
+  { label: 'Return on equity, 2029', published: 271.1, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'roe_ret'),
+    info: 'Not used: set at the interim 9.25% ROE and 5.04% short-term debt rate. The OEB updated 2026-2029 to 9.00% and 3.91% (EB-2025-0006, Dec 11, 2025), so this figure is superseded.' },
   { label: 'OM&A, 2029', published: 355.8, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'om') },
   { label: 'Service revenue requirement, 2025', published: 993.2, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2025, 'srr') },
-  { label: 'Service revenue requirement, 2027', published: 1071.3, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2027, 'srr') },
-  { label: 'Service revenue requirement, 2029', published: 1188.0, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'srr') },
+  { label: 'Service revenue requirement, 2027', published: 1071.3, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2027, 'srr'),
+    info: 'Not used: set at the interim 9.25% ROE and 5.04% short-term debt rate. The OEB updated 2026-2029 to 9.00% and 3.91% (EB-2025-0006, Dec 11, 2025), so this figure is superseded.' },
+  { label: 'Service revenue requirement, 2029', published: 1188.0, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'srr'),
+    info: 'Not used: set at the interim 9.25% ROE and 5.04% short-term debt rate. The OEB updated 2026-2029 to 9.00% and 3.91% (EB-2025-0006, Dec 11, 2025), so this figure is superseded.' },
   { label: 'Base revenue requirement, 2025', published: 944.9, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2025, 'brr') },
-  { label: 'Revenue after stretch factors, 2026', published: 979.1, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2026, 'dist_rev') },
-  { label: 'Revenue after stretch factors, 2029', published: 1100.9, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'dist_rev') },
+  { label: 'Revenue after stretch factors, 2026', published: 979.1, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2026, 'dist_rev'),
+    info: 'Not used: set at the interim 9.25% ROE and 5.04% short-term debt rate. The OEB updated 2026-2029 to 9.00% and 3.91% (EB-2025-0006, Dec 11, 2025), so this figure is superseded.' },
+  { label: 'Revenue after stretch factors, 2029', published: 1100.9, fmt: 'num', source: 'Draft Rate Order, Table 1', model: at(2029, 'dist_rev'),
+    info: 'Not used: set at the interim 9.25% ROE and 5.04% short-term debt rate. The OEB updated 2026-2029 to 9.00% and 3.91% (EB-2025-0006, Dec 11, 2025), so this figure is superseded.' },
   { label: '2025-2029 revenue after stretch factors, total', published: 5109.1, fmt: 'num', source: 'Draft Rate Order, Table 1',
-    model: ({ row }) => row.dist_rev.reduce((a, v, k) => a + (row.plan_flag[k] ? v : 0), 0) },
+    model: ({ row }) => row.dist_rev.reduce((a, v, k) => a + (row.plan_flag[k] ? v : 0), 0), info: 'Not used: set at the interim 9.25% ROE and 5.04% short-term debt rate. The OEB updated 2026-2029 to 9.00% and 3.91% (EB-2025-0006, Dec 11, 2025), so this figure is superseded.' },
+  { label: 'Deemed interest expense, 2026 (3.91% short-term rate)', published: 143.0, fmt: 'num', source: 'EB-2025-0006 Decision and Rate Order, Table 4.1', model: at(2026, 'int_deemed') },
+  { label: 'Return on equity, 2026 (9.00% ROE)', published: 223.9, fmt: 'num', source: 'EB-2025-0006 Decision and Rate Order, Table 4.1', model: at(2026, 'roe_ret') },
+  { label: 'Capital-related revenue requirement, 2026 (interest, ROE, depreciation, PILs)', published: 694.0, fmt: 'num', source: 'EB-2025-0006 Decision and Rate Order, Table 4.1',
+    model: ({ row }) => { const k = row.year.indexOf(2026); return row.int_deemed[k] + row.roe_ret[k] + row.dep[k] + row.pils[k]; } },
+  { label: 'OM&A, 2026', published: 331.3, fmt: 'num', source: 'EB-2025-0006 Decision and Rate Order, Table 4.1', model: at(2026, 'om') },
 ];

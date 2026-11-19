@@ -12,15 +12,15 @@ test('revenue requirement adds up from its parts', () => {
   const { row } = new Model(def).results();
   for (let k = 1; k < row.year.length; k++) {
     close(row.srr[k], row.om[k] + row.dep[k] + row.int_deemed[k] + row.roe_ret[k] + row.pils[k]);
-    close(row.roe_ret[k], row.rb[k] * 0.4 * 0.0925);
+    close(row.roe_ret[k], row.rb[k] * 0.4 * (k === 1 ? 0.0925 : 0.09));
     close(row.rb[k], (row.nfa_open[k] + row.nfa_close[k]) / 2 + 231.3);
   }
 });
 
 test('no growth, no stretch, bought and sold at book: equity IRR equals the allowed ROE', () => {
-  const s = new Model(def, { ...flat(300), isa_growth: 0, stretch: 0, entry_mult: 1, exit_mult: 1 }).results().scalar;
-  close(s.equity_irr, 0.0925, 1e-7);
-  close(s.avg_roe, 0.0925, 1e-9);
+  const s = new Model(def, { ...flat(300), isa_growth: 0, stretch: 0, entry_mult: 1, exit_mult: 1, roe_y1: 0 }).results().scalar;
+  close(s.equity_irr, 0.09, 1e-7);
+  close(s.avg_roe, 0.09, 1e-9);
 });
 
 test('buying at the value from the target IRR returns the target IRR', () => {
@@ -33,7 +33,7 @@ test('a higher entry multiple lowers the IRR; savings that offset the stretch re
   const lo = new Model(def, { entry_mult: 1.2 }).results().scalar, hi = new Model(def, { entry_mult: 1.6 }).results().scalar;
   assert.ok(hi.equity_irr < lo.equity_irr);
   const { row } = new Model(def, { savings: 1 }).results();
-  for (let k = 1; k < row.year.length; k++) close(row.earned_roe[k], 0.0925, 1e-9);
+  for (let k = 1; k < row.year.length; k++) close(row.earned_roe[k], k === 1 ? 0.0925 : 0.09, 1e-9);
 });
 
 test('Toronto Hydro example passes its published checks', () => {
