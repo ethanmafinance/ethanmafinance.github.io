@@ -47,6 +47,8 @@ const FLOW = {
   ebit: ['OperatingIncomeLoss', 'ProfitLossFromOperatingActivities'],
   da: ['DepreciationDepletionAndAmortization', 'DepreciationAndAmortization', 'DepreciationAmortizationAndAccretionNet', 'DepreciationAmortizationAndOther', 'Depreciation', 'DepreciationAndAmortisationExpense', 'DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss'],
   capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquireProductiveAssets', 'PaymentsForCapitalImprovements', 'PaymentsToAcquireOtherPropertyPlantAndEquipment', 'PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities'],
+  // Amortization of acquired intangibles: non-cash and not replaced by capex, so the forecast uses EBITA.
+  amort: ['AmortizationOfIntangibleAssets', 'AmortizationOfAcquiredIntangibleAssets'],
   cfo: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'CashFlowsFromUsedInOperatingActivities'],
   pretax: ['IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest', 'IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments', 'ProfitLossBeforeTax'],
   tax: ['IncomeTaxExpenseBenefit', 'IncomeTaxExpenseContinuingOperations'],
@@ -64,6 +66,8 @@ const BAL = {
   std: ['ShortTermBorrowings', 'CommercialPaper', 'ShorttermBorrowings'],
   nci: ['MinorityInterest', 'NoncontrollingInterestInConsolidatedEntity', 'NoncontrollingInterests'],
   pref: ['PreferredStockValue', 'PreferredStockValueOutstanding', 'PreferredStockIncludingAdditionalPaidInCapital'],
+  // Book equity of the parent's shareholders, for return on invested capital.
+  equity: ['StockholdersEquity', 'EquityAttributableToOwnersOfParent', 'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest', 'Equity'],
 };
 // Annual reports; 6-K too, because some 40-F filers (e.g. CN Rail) tag their full-year results only there. Flows must span a full year.
 const ANNUAL = /^(10-K|20-F|40-F|6-K)/;
@@ -84,7 +88,6 @@ function series(facts, concept, cur, instant) {
     if (Object.keys(byEnd).length) return { concept: `${ns}:${concept}`, byEnd };
   }
 }
-const firstSeries = (facts, list, cur, instant) => { for (const c of list) { const s = series(facts, c, cur, instant); if (s) return s; } };
 
 const link = (cik, accn) => `https://www.sec.gov/Archives/edgar/data/${cik}/${accn.replace(/-/g, '')}/`;
 
@@ -116,9 +119,12 @@ function beta(a, b, index) {
   const n = ra.length;
   if (n < 24) return { value: 1, months: n, index, from: a.t[0].slice(0, 7), to: a.t.at(-1).slice(0, 7), basis: `market beta of 1.0: only ${n} months of trading, fewer than the 24 needed for a regression` };
   const ma = ra.reduce((s, v) => s + v, 0) / n, mb = rb.reduce((s, v) => s + v, 0) / n;
-  let cov = 0, vb = 0;
-  for (let k = 0; k < n; k++) { cov += (ra[k] - ma) * (rb[k] - mb); vb += (rb[k] - mb) ** 2; }
-  return { value: +(cov / vb).toFixed(3), months: n, index, from: a.t[0].slice(0, 7), to: a.t.at(-2).slice(0, 7), basis: 'monthly price returns' };
+  let cov = 0, vb = 0, va = 0;
+  for (let k = 0; k < n; k++) { cov += (ra[k] - ma) * (rb[k] - mb); vb += (rb[k] - mb) ** 2; va += (ra[k] - ma) ** 2; }
+  const slope = cov / vb;
+  // Standard error of the slope: residual variance / (n - 2), over the index's sum of squares.
+  const se = Math.sqrt(Math.max(0, va - slope * cov) / (n - 2) / vb);
+  return { value: +slope.toFixed(3), se: +se.toFixed(3), months: n, index, from: a.t[0].slice(0, 7), to: a.t.at(-2).slice(0, 7), basis: 'monthly price returns' };
 }
 
 // Company facts: from the SEC bulk file when FACTS_ZIP points at companyfacts.zip (the daily job), else the API.
@@ -194,11 +200,14 @@ async function build(ticker, cikOf) {
     });
   }
 
+  // EBIT not tagged (e.g. Johnson & Johnson has no operating income line): pre-tax income plus interest expense.
+  hist.ebit = hist.ebit.map((f, k) => f ?? (hist.pretax[k] ? { ...hist.pretax[k], v: +(hist.pretax[k].v + (hist.int[k]?.v ?? 0)).toFixed(3), concept: `${hist.pretax[k].concept} + ${hist.int[k]?.concept ?? 'no interest tagged'} (pre-tax income plus interest expense)` } : null));
   const lastEnd = ends.at(-1);
   const bal = {};
   for (const [k, l] of Object.entries(BAL)) {
-    const s = firstSeries(facts, l, cur, true);
-    const f = s?.byEnd[lastEnd];
+    // first concept with a value at the year end (companies switch tags: one may stop before the latest year)
+    let s, f;
+    for (const c of l) { s = series(facts, c, cur, true); f = s?.byEnd[lastEnd]; if (f) break; }
     bal[k] = f ? { v: +(f.val / 1e6).toFixed(3), concept: s.concept, form: f.form, filed: f.filed, url: link(co.cik_str, f.accn) } : null;
   }
 

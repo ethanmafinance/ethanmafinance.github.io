@@ -218,27 +218,14 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
             <h1 style={{ fontSize: 22, margin: 0 }}>{title ?? `${co.name} (${co.ticker})`}</h1>
             <div className="note">Unlevered DCF, {a.scenario} case, {values.years}-year forecast, {values.tv_mode ? 'exit multiple' : 'perpetuity growth'} terminal value. {ccy} millions except per share. Filings to FY{co.fyEnds.at(-1)!.slice(0, 4)}; price {co.price.date}.{co.fx ? ` Reported in ${co.fx.from}; translated at ${co.fx.rate} US$ per ${co.fx.from} (${co.fx.date}).` : ''}{co.shares.adr ? ` Per ADS (${co.shares.adr} ordinary shares each).` : ''} <a href="#/equity">Change ticker or answers</a></div>
           </div>
-          <span className="head-actions"><SaveButton item={{ kind: 'equity', ticker: co.ticker, a, name: title ?? `${co.ticker} DCF`, values, headline: `${ccy}${fmt(res.scalar.per_share, 'px')} per share` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
+          <span className="head-actions"><SaveButton item={{ kind: 'equity', ticker: co.ticker, a, name: title ?? `${co.ticker} DCF`, values, headline: `DCF ${ccy}${fmt(res.scalar.per_share, 'px')} per share` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
         </div>
 
-        <ValuationSummary co={co} a={a} def={def} values={deferred} res={res} ccy={ccy} onCase={title ? undefined : c => { location.hash = hrefOf(co.ticker, { ...a, scenario: c }); }} />
+        <ValuationSummary missing={missing.length && !def.inputs.some(i => i.group === 'Reported financials' && values[i.id] !== defaults[i.id]) ? missing : undefined} co={co} a={a} def={def} values={deferred} res={res} ccy={ccy} onCase={title ? undefined : c => { location.hash = hrefOf(co.ticker, { ...a, scenario: c }); }} />
 
         {missing.length > 0 && (
           <p className="card warn">Not tagged in this company's XBRL data: {missing.join(', ')}. Those years show 0 and the defaults that depend on them are placeholders. Enter the reported figures from the annual report under Reported financials before relying on the value.</p>
         )}
-
-        <div className="kpis">
-          {([
-            ['Value per share', `${ccy}${fmt(s.per_share, 'px')}`, `price ${ccy}${fmt(values.price, 'px')}`],
-            ['Upside', fmt(s.upside, 'pct'), 'to the current price'],
-            ['Enterprise value', fmt(s.ev), `${ccy}m; market ${fmt(s.mkt_ev)}`],
-            ['WACC', fmt(s.wacc, 'pct'), values.wacc_mode ? 'entered' : `Ke ${fmt(s.ke, 'pct')}, debt ${fmt(s.w_d, 'pct')}`],
-            ['Terminal value', fmt(s.tv_share, 'pct'), 'of enterprise value'],
-            ['Implied EV / EBITDA', fmt(s.ev_ebitda, 'x'), `forecast year 1; terminal ${fmt(s.tv_mult_implied, 'x')}`],
-          ] as const).map(([l, v, sub]) => (
-            <div className="card kpi" key={l}><div className="label">{l}</div><div className="value">{v}</div><div className="sub">{sub}</div></div>
-          ))}
-        </div>
 
         <div className="card">
           <h2>What the price implies</h2>
@@ -265,7 +252,7 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
 
         <div className="two">
           <div className="card">
-            <h2>Value per share by WACC and terminal growth</h2>
+            <h2>DCF implied share price by WACC and terminal growth</h2>
             <div className="scroll-x"><table>
               <thead><tr><th>WACC</th>{G_STEPS.map(dg => <th key={dg}>g {fmt(values.g_term + dg, 'pct')}</th>)}</tr></thead>
               <tbody>
@@ -274,16 +261,16 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
                 ))}
               </tbody>
             </table></div>
-            <p className="note">Green cells are at or above the current price. {values.tv_mode ? 'The exit multiple method ignores terminal growth, so columns differ only through the forecast fade.' : values.ronic === 0 ? 'With return on new capital equal to WACC, growth adds no value, so the columns barely move. Set RONIC above WACC to value growth.' : ''}</p>
+            <p className="note">Green cells are at or above the current price. {values.tv_mode ? 'The exit multiple method ignores terminal growth, so columns differ only through the forecast fade.' : `Return on new capital is ${fmt(s.ronic_used, 'pct')}; the closer it is to WACC, the less terminal growth adds.`}</p>
           </div>
           <div className="card">
             <h2>Equity bridge ({ccy}m)</h2>
             <table><tbody>
-              {([['Enterprise value', s.ev], ['Less debt', -values.debt], ['Plus cash', values.cash], ['Less non-controlling interests', -values.nci], ['Less preferred shares', -values.pref], ['Equity value', s.eq]] as const).map(([l, v]) => (
+              {([['Enterprise value', s.ev], ['Plus cash flow since the fiscal year end', s.stub_fcf], ['Less debt', -values.debt], ['Plus cash', values.cash], ['Less non-controlling interests', -values.nci], ['Less preferred shares', -values.pref], ['Equity value', s.eq]] as const).map(([l, v]) => (
                 <tr key={l} className={l === 'Equity value' ? 'total' : ''}><td>{l}</td><td>{fmt(v)}</td></tr>
               ))}
               <tr><td>Shares (m)</td><td>{fmt(values.shares)}</td></tr>
-              <tr className="total"><td>Value per share ({ccy})</td><td>{fmt(s.per_share, 'px')}</td></tr>
+              <tr className="total"><td>DCF implied share price ({ccy})</td><td>{fmt(s.per_share, 'px')}</td></tr>
             </tbody></table>
             <p className="note">Debt, non-controlling interests and preferred shares at book value from the last annual filing.</p>
           </div>
@@ -303,7 +290,7 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
           </div>
         </div>
         <CasesPanel id={`eq.${title ? 'example.' : ''}${co.ticker}.${a.years}.${a.scenario}.${a.wacc}.${a.terminal}`} m={scratch} values={values} defaults={defaults} setValues={setValues} metrics={[
-          ['Value per share', x => `${ccy}${fmt(x.scalar.per_share, 'px')}`], ['Upside to price', x => fmt(x.scalar.upside, 'pct')], ['Enterprise value', x => fmt(x.scalar.ev)],
+          ['DCF implied share price', x => `${ccy}${fmt(x.scalar.per_share, 'px')}`], ['Upside to price', x => fmt(x.scalar.upside, 'pct')], ['Enterprise value', x => fmt(x.scalar.ev)],
           ['WACC', x => fmt(x.scalar.wacc, 'pct')], ['Terminal value share', x => fmt(x.scalar.tv_share, 'pct')], ['Implied EV / EBITDA', x => fmt(x.scalar.ev_ebitda, 'x')],
         ]} />
         {checks && <ChecksCard mod={{ checks } as Module} res={res} />}
@@ -319,7 +306,7 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
             <div className="memo-two">
               <section><h2>Valuation</h2><Rows rows={[
                 ['Enterprise value', fmt(s.ev)], ['Less debt', fmt(-values.debt)], ['Plus cash', fmt(values.cash)], ['Less NCI and preferred', fmt(-values.nci - values.pref)],
-                ['Equity value', fmt(s.eq)], ['Shares (m)', fmt(values.shares)], ['Value per share', `${ccy}${fmt(s.per_share, 'px')}`], ['Implied EV / EBITDA, year 1', fmt(s.ev_ebitda, 'x')],
+                ['Equity value', fmt(s.eq)], ['Shares (m)', fmt(values.shares)], ['DCF implied share price', `${ccy}${fmt(s.per_share, 'px')}`], ['Implied EV / EBITDA, year 1', fmt(s.ev_ebitda, 'x')],
               ]} /></section>
               <section><h2>Assumptions</h2><Rows rows={[
                 ['Revenue growth, year 1 to terminal', `${fmt(values.g1, 'pct')} to ${fmt(values.g_term, 'pct')}`], ['EBIT margin, year 1 to target', `${fmt(values.m1, 'pct')} to ${fmt(values.m_target, 'pct')}`],
@@ -329,7 +316,7 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
               ]} /></section>
             </div>
             <section>
-              <h2>Value per share by WACC and terminal growth ({ccy})</h2>
+              <h2>DCF implied share price by WACC and terminal growth ({ccy})</h2>
               <table><tbody>
                 <tr><th>WACC</th>{G_STEPS.map(dg => <th key={dg}>g {fmt(values.g_term + dg, 'pct')}</th>)}</tr>
                 {WACC_STEPS.map((dw, i) => <tr key={dw}><td>{fmt(extra.w0 + dw, 'pct')}</td>{extra.grid[i].map((x, j) => <td key={j}>{fmt(x, 'px')}</td>)}</tr>)}

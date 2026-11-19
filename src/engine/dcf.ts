@@ -11,12 +11,12 @@ import type { Input, Item, ModelDef, Source } from './sheet.ts';
 type Fact = { v: number; concept: string; form: string; filed?: string; url: string } | null;
 export type Company = {
   ticker: string; name: string; cik: number; currency: 'USD' | 'CAD'; fyEnds: string[];
-  hist: Record<'rev' | 'ebit' | 'da' | 'capex' | 'cfo' | 'pretax' | 'tax' | 'ni' | 'int', Fact[]>;
-  bal: Record<'cash' | 'debt_total' | 'ltd' | 'ltd_cur' | 'std' | 'nci' | 'pref', Fact>;
+  hist: Record<'rev' | 'ebit' | 'da' | 'capex' | 'cfo' | 'pretax' | 'tax' | 'ni' | 'int', Fact[]> & { amort?: Fact[] };
+  bal: Record<'cash' | 'debt_total' | 'ltd' | 'ltd_cur' | 'std' | 'nci' | 'pref', Fact> & { equity?: Fact };
   shares: { v: number; asOf: string; concept: string; form: string; url: string; adr?: number };
   price: { v: number; date: string; symbol: string; exchange: string; hi52?: number; lo52?: number };
   sic?: string; sicDesc?: string;
-  beta: { value: number; months: number; index: string; from: string; to: string; basis?: string;
+  beta: { value: number; months: number; index: string; from: string; to: string; basis?: string; se?: number;
     bottomUp?: { value: number; unlevered: number; n: number; de: number; tax: number; peers: string } };
   fx?: { from: string; rate: number; date: string; symbol: string };
   rf: { value: number; date: string; title: string; url: string };
@@ -31,7 +31,11 @@ const STATUTORY = { USD: 0.21, CAD: 0.265 };
 export const SCENARIO = { base: [0, 1, 0], downside: [-0.03, 0.9, -0.005], upside: [0.03, 1.1, 0.005] } as const;
 
 const ERP: Source = { title: 'Damodaran, implied equity risk premium (FCFE) for the S&P 500, start of 2026', date: 'Jan 7, 2026', url: 'https://pages.stern.nyu.edu/~adamodar/pc/datasets/histimpl.xls' };
-const TARGET2: Source = { title: 'Bank of Canada and US Federal Reserve inflation targets, 2%', url: 'https://www.bankofcanada.ca/rates/indicators/key-variables/inflation-control-target/' };
+const FOMC: Source = { title: 'Federal Reserve, Summary of Economic Projections, September 16, 2026: longer-run median real GDP growth 2.0%, PCE inflation 2.0%', date: 'Sep 16, 2026', url: 'https://www.federalreserve.gov/monetarypolicy/fomcprojtabl20260916.htm' };
+// Terminal growth: below long-run nominal GDP growth (about 4%) because no company outgrows the economy forever, and below the 10-year yield (Damodaran's cap).
+export const G_TERM = 0.03;
+// Return on invested capital above this is capped: book capital understates intangible-heavy and buyback-heavy companies.
+const ROIC_CAP = 0.5;
 const VALUATION: Source = { title: 'Koller, Goedhart and Wessels, Valuation (McKinsey), value driver formula; Damodaran, Investment Valuation', note: '' };
 const STAT: Record<string, Source> = {
   USD: { title: 'US federal corporate tax rate 21% (IRC section 11)', url: 'https://www.irs.gov/businesses/small-businesses-self-employed/corporate-tax-rates' },
@@ -74,7 +78,12 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
   const v = (f: Fact) => f?.v ?? 0;
 
   // Defaults computed from the filings (shown as est. with the method).
-  const r = rev.map(v), e = ebit.map(v), d = da.map(v), x = capex.map(v);
+  // Amortization of acquired intangibles (when tagged): added back to EBIT and taken out of D&A, so the forecast runs on
+  // EBITA and depreciation. It is non-cash and capex does not replace it, so leaving it in would understate acquirers' cash flow.
+  const amF = (c.hist.amort ?? []).slice(-H);
+  const amRaw = Array.from({ length: H }, (_, k) => Math.max(0, Math.min(v(amF[k] ?? null), v(da[k]))));
+  const hasAm = amRaw.some(z => z > 0);
+  const r = rev.map(v), d = da.map((f, k) => v(f) - amRaw[k]), x = capex.map(v), e = ebit.map((f, k) => v(f) + amRaw[k]);
   const taxes = c.hist.tax.slice(-H).map(v), pre = c.hist.pretax.slice(-H).map(v);
   const effTax = avg(pre) > 0 ? avg(taxes) / avg(pre) : NaN;
   const useEff = effTax >= 0.05 && effTax <= 0.4;
@@ -91,10 +100,20 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
   const kd = int && debt.v > 0 ? clamp(int.v / debt.v, c.rf.value, c.rf.value + 0.05) : c.rf.value + 0.015;
   const fyEnd = c.fyEnds.at(-1)!;
   const stub = clamp((Date.parse(c.price.date) - Date.parse(fyEnd)) / (365.25 * 864e5), 0, 0.99);
+  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
   const ebitda = e[H - 1] + d[H - 1];
+  // Return on invested capital, last fiscal year: NOPAT / (book equity + debt + NCI + preferred - cash) at year end.
+  const ic = c.bal.equity ? c.bal.equity.v + debt.v + v(c.bal.nci) + v(c.bal.pref) - v(c.bal.cash) : NaN;
+  const roicRaw = nopat[H - 1] / ic;
+  const roic = !c.bal.equity || nopat[H - 1] <= 0 ? 0 : ic <= 0 || roicRaw > ROIC_CAP ? ROIC_CAP : roicRaw;
+  const roicNote = !c.bal.equity ? 'book equity is not tagged, so the return on capital is unknown and new capital is assumed to earn WACC'
+    : nopat[H - 1] <= 0 ? `FY${fy[H - 1]} operating income is negative, so new capital is assumed to earn WACC`
+    : ic <= 0 ? `book invested capital is negative (buybacks above book equity), so the return on it is not meaningful; capped at ${ROIC_CAP * 100}%`
+    : `FY${fy[H - 1]} NOPAT ${nopat[H - 1].toFixed(0)} / invested capital ${ic.toFixed(0)} (book equity ${c.bal.equity.v.toFixed(0)} + debt + NCI + preferred - cash) = ${pct(roicRaw)}${roicRaw > ROIC_CAP ? `, capped at ${ROIC_CAP * 100}%: book capital leaves out brands, software and research, so very high book returns overstate what new capital earns` : ''}`;
+  // Beta: the company's own regression when it is precise (60 months, standard error 0.2 or less); otherwise peers.
+  const ownPrecise = c.beta.se !== undefined && c.beta.se <= 0.2 && c.beta.months >= 48;
   const evNow = c.price.v * c.shares.v + debt.v - v(c.bal.cash) + v(c.bal.nci) + v(c.bal.pref);
   const cur = c.currency === 'CAD' ? 'C$m' : 'US$m';
-  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
 
   const g = (group: string, list: Omit<Input, 'group'>[]): Input[] => list.map(i => ({ ...i, group }));
   const histInputs = (id: string, label: string, facts: Fact[]) =>
@@ -108,7 +127,7 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       { id: 'hold', label: 'Forecast years held at the year 1 growth, margin and reinvestment before the fade', unit: 'years', value: 0, fmt: 'int', min: 0, max: 14, step: 1,
         source: est('0 or 1 = fade from year 1. Set to the length of a company plan (e.g. 5) to run its guidance before fading') },
       { id: 'stub', label: 'Share of the current fiscal year already passed at the price date', unit: 'years', value: +stub.toFixed(3), fmt: 'num',
-        source: est(`from the fiscal year end (${fyEnd}) to the price date (${c.price.date}); that part of year 1 cash flow is excluded`) },
+        source: est(`from the fiscal year end (${fyEnd}) to the price date (${c.price.date}). That part of year 1 cash flow is not discounted; it is added to the equity bridge, because the balance sheet is from the year end`) },
       { id: 'mid', label: 'Mid-year discounting (1 = yes, 0 = year end)', unit: 'flag', value: 1, fmt: 'flag', min: 0, max: 1, step: 1,
         source: est('cash arrives through the year, so the usual convention discounts it from mid-year') },
     ]),
@@ -117,22 +136,26 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       ...histInputs('ebit', 'Operating income (EBIT)', ebit),
       ...histInputs('da', 'Depreciation and amortization', da),
       ...histInputs('capex', 'Capital expenditures', capex),
+      ...(hasAm ? histInputs('amort', 'Amortization of acquired intangibles (in EBIT and D&A above)', Array.from({ length: H }, (_, k) => amF[k] ?? null)) : []),
     ]),
     ...g('Forecast', [
       { id: 'g1', label: 'Revenue growth, forecast year 1', unit: '%', value: +g1.toFixed(4), fmt: 'pct',
         source: est(`FY${fy[0]} to FY${fy[H - 1]} revenue CAGR of ${pct(cagr)}${dg ? `, ${dg > 0 ? '+' : ''}${dg * 100}pt for the ${a.scenario} case` : ''}. No analyst consensus is used`) },
-      { id: 'g_term', label: 'Terminal growth (revenue growth fades to this by the last forecast year)', unit: '%', value: +(0.02 + dgt).toFixed(4), fmt: 'pct',
-        source: est(`long-run nominal growth at the 2% inflation target, no real growth${dgt ? `, ${dgt > 0 ? '+' : ''}${dgt * 100}pt for the ${a.scenario} case` : ''}`, TARGET2) },
+      { id: 'g_term', label: 'Terminal growth (revenue growth fades to this by the last forecast year)', unit: '%', value: +(G_TERM + dgt).toFixed(4), fmt: 'pct',
+        source: est(`${G_TERM * 100}%: below long-run nominal GDP growth of about 4% (2.0% real plus 2.0% inflation), since no company outgrows the economy forever, and below the 10-year yield, the usual cap (Damodaran)${dgt ? `; ${dgt > 0 ? '+' : ''}${dgt * 100}pt for the ${a.scenario} case` : ''}`, FOMC) },
       { id: 'm1', label: 'EBIT margin, forecast year 1', unit: '%', value: +margins[H - 1].toFixed(4), fmt: 'pct',
-        source: est(`FY${fy[H - 1]} reported EBIT margin`) },
+        source: est(`FY${fy[H - 1]} reported ${hasAm ? 'EBITA (EBIT plus amortization of acquired intangibles)' : 'EBIT'} margin`) },
       { id: 'm_target', label: 'EBIT margin, last forecast year (target)', unit: '%', value: +shiftMargin(med(margins), mm).toFixed(4), fmt: 'pct',
         source: est(`median of the last ${H} reported margins, ${pct(med(margins))} (${margins.map(pct).join(', ')}): the median ignores one unusual year, such as a loss year or a peak${mm !== 1 ? `; ${mm > 1 ? '+' : '-'}${Math.round(Math.abs(mm - 1) * 100)}% of its size for the ${a.scenario} case` : ''}`) },
-      { id: 'da_pct', label: 'Depreciation and amortization', unit: '% of revenue', value: +(avg(d) / avg(r)).toFixed(4), fmt: 'pct',
+      { id: 'da_pct', label: hasAm ? 'Depreciation and amortization, excluding acquired intangibles' : 'Depreciation and amortization', unit: '% of revenue', value: +(avg(d) / avg(r)).toFixed(4), fmt: 'pct',
         source: est(`${H}-year reported average`) },
       { id: 'reinv1', label: 'Reinvestment rate, forecast year 1: (capex - D&A) / NOPAT', unit: '%', value: capexOk ? +reinv.toFixed(4) : +(0.02 / 0.08).toFixed(4), fmt: 'pct',
         source: capexOk ? est(`${H}-year reported average`) : est('capex is not tagged, so this starts at the steady state (2% growth / 8% return on new capital); enter reported capex and set this from it') },
-      { id: 'ronic', label: 'Return on new invested capital in the terminal period (RONIC)', unit: '%', value: 0, fmt: 'pct',
-        source: est('0 = equal to WACC: new investment earns its cost of capital in perpetuity, so growth adds no value (the standard neutral assumption)', VALUATION) },
+      { id: 'roic', label: 'Return on invested capital, last fiscal year (ROIC)', unit: '%', value: +roic.toFixed(4), fmt: 'pct', source: est(roicNote) },
+      { id: 'ronic_keep', label: 'Share of the ROIC premium over WACC that new capital keeps in perpetuity', unit: '%', value: 0.5, fmt: 'pct',
+        source: est('50%, midway between the two textbook ends: 0% = competition drives returns on new capital down to WACC, so growth adds no value; 100% = a lasting advantage (brand, patents, network) keeps its current return. Return on new capital = WACC + this share x (ROIC - WACC), never below WACC', VALUATION) },
+      { id: 'ronic', label: 'Return on new capital, entered directly (0 = use the two lines above)', unit: '%', value: 0, fmt: 'pct',
+        source: est('0 = computed from ROIC and the share kept') },
       { id: 'tax', label: 'Tax rate on operating income', unit: '%', value: +tax.toFixed(4), fmt: 'pct',
         source: useEff ? est(`${H}-year effective rate: income tax / pre-tax income from the filings`) : est(`statutory rate: the ${H}-year effective rate (${Number.isFinite(effTax) ? pct(effTax) : 'n/a'}) is outside 5% to 40%`, STAT[c.currency]) },
     ]),
@@ -143,11 +166,11 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       (() => {
         const raw = `${c.beta.value.toFixed(2)} from ${c.beta.basis?.startsWith('market beta') ? c.beta.basis : `a regression of ${c.beta.months} monthly ${c.beta.basis === 'monthly price returns' ? 'price' : 'total'} returns, ${c.beta.from} to ${c.beta.to}, on the ${c.beta.index === '^GSPTSE' ? 'S&P/TSX Composite' : 'S&P 500'} (Yahoo Finance)`}`;
         const bu = c.beta.bottomUp;
-        return bu
+        return bu && !ownPrecise
           ? { id: 'beta', label: 'Equity beta (bottom-up, from peers)', unit: 'x', value: +(0.67 * bu.value + 0.33).toFixed(3), fmt: 'x' as const,
-              source: est(`Blume-adjusted (0.67 x + 0.33) bottom-up beta of ${bu.value.toFixed(2)}: median unlevered beta of ${bu.n} peers (${bu.peers}), ${bu.unlevered.toFixed(2)}, relevered at ${c.ticker}'s net debt / equity of ${bu.de.toFixed(2)} with a ${bu.tax * 100}% tax rate: beta_L = beta_U x (1 + (1 - t) x D/E) (Damodaran, bottom-up beta). A single company's 5-year regression is noisy; ${c.ticker}'s own raw beta is ${raw}`) }
+              source: est(`Blume-adjusted (0.67 x + 0.33) bottom-up beta of ${bu.value.toFixed(2)}: median unlevered beta of ${bu.n} peers (${bu.peers}), ${bu.unlevered.toFixed(2)}, relevered at ${c.ticker}'s net debt / equity of ${bu.de.toFixed(2)} with a ${bu.tax * 100}% tax rate: beta_L = beta_U x (1 + (1 - t) x D/E) (Damodaran, bottom-up beta). ${c.ticker}'s own regression is not precise enough to use alone (${c.beta.se !== undefined ? `standard error ${c.beta.se.toFixed(2)}, above 0.2` : 'standard error not available'}); raw beta ${raw}`) }
           : { id: 'beta', label: 'Equity beta (adjusted)', unit: 'x', value: +(0.67 * c.beta.value + 0.33).toFixed(3), fmt: 'x' as const,
-              source: est(`Blume adjustment 0.67 x raw + 0.33 (betas drift toward 1; the convention behind Bloomberg's adjusted beta); fewer than 5 peers for a bottom-up beta. Raw beta ${raw}`) };
+              source: est(`Blume adjustment 0.67 x raw + 0.33 (betas drift toward 1; the convention behind Bloomberg's adjusted beta). ${ownPrecise ? `The company's own regression is precise (standard error ${c.beta.se!.toFixed(2)}), so it is used${bu ? ` rather than the peer beta of ${(0.67 * bu.value + 0.33).toFixed(2)} adjusted` : ''}` : 'Fewer than 5 peers for a bottom-up beta'}. Raw beta ${raw}`) };
       })(),
       { id: 'erp', label: 'Equity risk premium', unit: '%', value: 0.0423, fmt: 'pct', source: ERP },
       { id: 'kd', label: 'Pre-tax cost of debt', unit: '%', value: +kd.toFixed(4), fmt: 'pct',
@@ -182,8 +205,9 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
   const items: Item[] = [
     { section: 'Valuation summary' },
     sc('ev', 'Enterprise value (present value of free cash flow and terminal value)', cur, 'num', x => `SUM(${x.row('pv_fcf')})+${x.s('pv_tv')}`, { bold: true }),
-    sc('eq', 'Equity value (EV - debt + cash - non-controlling interests - preferred)', cur, 'num', x => `${x.s('ev')}-${x.i('debt')}+${x.i('cash')}-${x.i('nci')}-${x.i('pref')}`, { bold: true }),
-    sc('per_share', 'Value per share', c.currency === 'CAD' ? 'C$' : 'US$', 'px', x => `${x.s('eq')}/${x.i('shares')}`, { bold: true }),
+    sc('stub_fcf', 'Free cash flow earned since the fiscal year end (not yet in the year-end balance sheet)', cur, 'num', x => `INDEX(${x.row('fcf')},1,${H_ + 1})*${x.i('stub')}`),
+    sc('eq', 'Equity value (EV + cash flow since year end - debt + cash - non-controlling interests - preferred)', cur, 'num', x => `${x.s('ev')}+${x.s('stub_fcf')}-${x.i('debt')}+${x.i('cash')}-${x.i('nci')}-${x.i('pref')}`, { bold: true }),
+    sc('per_share', 'DCF implied share price', c.currency === 'CAD' ? 'C$' : 'US$', 'px', x => `${x.s('eq')}/${x.i('shares')}`, { bold: true }),
     sc('upside', 'Upside to the current share price', '%', 'pct', x => `${x.s('per_share')}/${x.i('price')}-1`, { bold: true }),
     sc('tv_share', 'Terminal value share of enterprise value', '%', 'pct', x => `${x.s('pv_tv')}/${x.s('ev')}`),
     sc('ev_ebitda', 'Implied EV / EBITDA, forecast year 1', 'x', 'x', x => `${x.s('ev')}/INDEX(${x.row('ebitda')},1,${H_ + 1})`),
@@ -199,7 +223,7 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
 
     { section: 'Terminal value' },
     sc('nopat_n1', 'NOPAT in the year after the forecast', cur, 'num', x => `INDEX(${x.row('nopat')},1,${x.i('years')}+${H_})*(1+${x.i('g_term')})`),
-    sc('ronic_used', 'RONIC used (WACC when left at 0)', '%', 'pct', x => `IF(${x.i('ronic')}=0,${wacc(x)},${x.i('ronic')})`),
+    sc('ronic_used', 'Return on new capital used: WACC + share kept x (ROIC - WACC)', '%', 'pct', x => `IF(${x.i('ronic')}>0,${x.i('ronic')},${wacc(x)}+${x.i('ronic_keep')}*MAX(0,${x.i('roic')}-${wacc(x)}))`),
     sc('tv_growth', 'Terminal value, perpetuity growth: NOPAT x (1 - g / RONIC) / (WACC - g)', cur, 'num', x => `${x.s('nopat_n1')}*(1-${x.i('g_term')}/${x.s('ronic_used')})/(${wacc(x)}-${x.i('g_term')})`),
     sc('tv_mult', 'Terminal value, exit multiple x last-year EBITDA', cur, 'num', x => `${x.i('exit_mult')}*INDEX(${x.row('ebitda')},1,${x.i('years')}+${H_})`),
     sc('tv', 'Terminal value used', cur, 'num', x => `IF(${x.i('tv_mode')}=1,${x.s('tv_mult')},${x.s('tv_growth')})`, { bold: true }),
@@ -215,8 +239,8 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
     row('growth', 'Revenue growth', '%', 'pct', x => (x.k < H_ ? (x.first ? '""' : `${x.r('rev')}/${x.p('rev')}-1`) : fade(x, 'g1', x.i('g_term')))),
     row('rev', 'Revenue', cur, 'num', x => (x.k < H_ ? hv(x, 'rev') : `${x.p('rev')}*(1+${x.r('growth')})`), { bold: true }),
     row('margin', 'EBIT margin', '%', 'pct', x => (x.k < H_ ? `${x.r('ebit')}/${x.r('rev')}` : fade(x, 'm1', x.i('m_target')))),
-    row('ebit', 'EBIT', cur, 'num', x => (x.k < H_ ? hv(x, 'ebit') : `${x.r('rev')}*${x.r('margin')}`)),
-    row('da', 'Depreciation and amortization', cur, 'num', x => (x.k < H_ ? hv(x, 'da') : `${x.r('rev')}*${x.i('da_pct')}`)),
+    row('ebit', hasAm ? 'EBITA: EBIT before amortization of acquired intangibles' : 'EBIT', cur, 'num', x => (x.k < H_ ? hv(x, 'ebit') + (hasAm ? '+' + hv(x, 'amort') : '') : `${x.r('rev')}*${x.r('margin')}`)),
+    row('da', hasAm ? 'Depreciation and amortization, excluding acquired intangibles' : 'Depreciation and amortization', cur, 'num', x => (x.k < H_ ? hv(x, 'da') + (hasAm ? '-' + hv(x, 'amort') : '') : `${x.r('rev')}*${x.i('da_pct')}`)),
     row('ebitda', 'EBITDA', cur, 'num', x => `${x.r('ebit')}+${x.r('da')}`, { bold: true }),
     row('nopat', 'NOPAT: EBIT x (1 - tax)', cur, 'num', x => `${x.r('ebit')}*(1-${x.i('tax')})`),
     row('reinv_rate', 'Reinvestment rate: (capex - D&A) / NOPAT', '%', 'pct',
@@ -240,7 +264,7 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       columns: vv => H_ + vv.years,
       dash: {
         units: `${c.currency} millions except per share; FY = reported, E = forecast`,
-        inputs: ['years', 'g1', 'g_term', 'm1', 'm_target', 'tax', 'reinv1', 'rf', 'beta', 'erp', 'kd', 'wacc_in', 'exit_mult', 'shares', 'price'],
+        inputs: ['years', 'g1', 'g_term', 'm1', 'm_target', 'tax', 'reinv1', 'roic', 'ronic_keep', 'rf', 'beta', 'erp', 'kd', 'wacc_in', 'exit_mult', 'shares', 'price'],
         outputs: ['per_share', 'upside', 'ev', 'eq', 'mkt_ev', 'ke', 'wacc', 'tv_share', 'ev_ebitda'],
         rows: ['rev', 'growth', 'ebitda', 'ebit', 'margin', 'nopat', 'capex', 'fcf'],
       },

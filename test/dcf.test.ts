@@ -23,9 +23,11 @@ test('steady state: enterprise value equals the growing perpetuity FCF1 / (WACC 
 });
 
 test('equity bridge and per share value', () => {
-  const { scalar: s } = new Model(def).results();
+  const { scalar: s, row } = new Model(def).results();
   const v = Object.fromEntries(def.inputs.map(i => [i.id, i.value]));
-  close(s.eq, s.ev - v.debt + v.cash - v.nci - v.pref);
+  // cash flow earned between the fiscal year end and the price date is added: the balance sheet is from the year end
+  close(s.stub_fcf, row.fcf[row.fc.indexOf(1)] * v.stub);
+  close(s.eq, s.ev + s.stub_fcf - v.debt + v.cash - v.nci - v.pref);
   close(s.per_share, s.eq / v.shares);
   close(s.wacc, (1 - s.w_d) * (v.rf + v.beta * v.erp) + s.w_d * v.kd * (1 - v.tax));
 });

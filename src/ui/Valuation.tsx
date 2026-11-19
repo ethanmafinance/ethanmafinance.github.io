@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Model, type ModelDef } from '../engine/sheet.ts';
 import { SCENARIO, shiftMargin, type Answers, type Company } from '../engine/dcf.ts';
-import { dcfFit, quantile } from '../engine/fit.ts';
+import { blend, dcfFit, quantile, WHY, type Method } from '../engine/fit.ts';
 import { multiples, pickPeers, rowsOf, type Row } from '../engine/comps.ts';
 import { fmt } from './ModelPage.tsx';
 import { DATA } from './EquityPage.tsx';
@@ -15,10 +15,10 @@ const CASES: [Case, string][] = [['downside', 'Bear'], ['base', 'Base'], ['upsid
 let compsCache: Promise<Row[]> | undefined;
 const loadComps = () => (compsCache ??= fetch(DATA + 'comps.json').then(r => (r.ok ? r.json() : { fields: [], rows: [] })).then(rowsOf, () => []));
 
-type Bar = { label: string; lo: number; mid: number; hi: number; basis: string; off?: string };
+type Bar = { label: string; lo: number; mid: number; hi: number; basis: string; off?: string; key?: Method };
 
-export function ValuationSummary({ co, a, def, values, res, ccy, onCase }: {
-  co: Company; a: Answers; def: ModelDef; values: V; res: { scalar: V; row: Record<string, number[]> }; ccy: string; onCase?: (c: Case) => void;
+export function ValuationSummary({ co, a, def, values, res, ccy, onCase, missing }: {
+  co: Company; a: Answers; def: ModelDef; values: V; res: { scalar: V; row: Record<string, number[]> }; ccy: string; onCase?: (c: Case) => void; missing?: string[];
 }) {
   const [rows, setRows] = useState<Row[]>();
   useEffect(() => { loadComps().then(setRows); }, []);
@@ -49,26 +49,49 @@ export function ValuationSummary({ co, a, def, values, res, ccy, onCase }: {
     const base = run({ ...caseVals('base') });
     m.hf.destroy();
     const fcfForecast = base.row.fcf.filter((_, k) => base.row.fc[k] === 1);
-    const fit = dcfFit({ rev, ebit, capex, fcfForecast, ev: res.scalar.ev, tvShare: res.scalar.tv_share });
+    const fit = dcfFit({ rev, ebit, capex, fcfForecast, ev: res.scalar.ev, tvShare: res.scalar.tv_share, missing });
     return { perp, exit, exitM, fit };
-  }, [def, values, a.scenario, qEbitda?.[0], qEbitda?.[1], qEbitda?.[2]]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [def, values, a.scenario, missing?.length, qEbitda?.[0], qEbitda?.[1], qEbitda?.[2]]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dcfOff = out.fit.verdict === 'no' ? 'not meaningful' : undefined;
   const bars: Bar[] = [
-    { label: 'DCF, perpetuity growth', lo: out.perp[0], mid: out.perp[1], hi: out.perp[2], basis: 'Bear, base and bull cases', off: dcfOff },
-    { label: 'DCF, exit multiple', lo: out.exit[0], mid: out.exit[1], hi: out.exit[2], basis: !qEbitda && !(values.exit_mult > 0) ? 'No exit multiple: fewer than 3 peers with a meaningful EV / EBITDA and the current multiple is negative' : `Exit EV / EBITDA ${out.exitM.map(x => fmt(x, 'x')).join(', ')} (${qEbitda ? 'peer 25th, median, 75th' : 'current multiple -20%, 0, +20%'}) with the bear, base and bull cases`, off: dcfOff ?? (qEbitda || values.exit_mult > 0 ? undefined : 'no exit multiple') },
+    { key: 'dcf_g', label: 'DCF, perpetuity growth', lo: out.perp[0], mid: out.perp[1], hi: out.perp[2], basis: 'Bear, base and bull cases', off: dcfOff },
+    // The exit-multiple DCF counts in the implied price only on peer multiples: the company's own multiple would just restate its price.
+    { key: qEbitda ? 'dcf_x' : undefined, label: 'DCF, exit multiple', lo: out.exit[0], mid: out.exit[1], hi: out.exit[2], basis: !qEbitda && !(values.exit_mult > 0) ? 'No exit multiple: fewer than 3 peers with a meaningful EV / EBITDA and the current multiple is negative' : `Exit EV / EBITDA ${out.exitM.map(x => fmt(x, 'x')).join(', ')} (${qEbitda ? 'peer 25th, median, 75th' : 'current multiple -20%, 0, +20%'}) with the bear, base and bull cases`, off: dcfOff ?? (qEbitda || values.exit_mult > 0 ? undefined : 'no exit multiple') },
   ];
-  const compBar = (label: string, qs: readonly [number, number, number] | undefined, metric: number | null, toShare: (x: number) => number, what: string) => {
+  const compBar = (key: Method, label: string, qs: readonly [number, number, number] | undefined, metric: number | null, toShare: (x: number) => number, what: string) => {
     if (!qs) return bars.push({ label, lo: NaN, mid: NaN, hi: NaN, basis: 'fewer than 3 peers with a meaningful multiple', off: 'no peers' });
     if (!(metric && metric > 0)) return bars.push({ label, lo: NaN, mid: NaN, hi: NaN, basis: `${co.ticker}'s ${what} is negative`, off: 'not meaningful' });
-    bars.push({ label, lo: toShare(qs[0] * metric), mid: toShare(qs[1] * metric), hi: toShare(qs[2] * metric), basis: `Peer 25th to 75th percentile ${fmt(qs[0], 'x')} to ${fmt(qs[2], 'x')}, median ${fmt(qs[1], 'x')}, on last-year ${what}` });
+    bars.push({ key, label, lo: toShare(qs[0] * metric), mid: toShare(qs[1] * metric), hi: toShare(qs[2] * metric), basis: `Peer 25th to 75th percentile ${fmt(qs[0], 'x')} to ${fmt(qs[2], 'x')}, median ${fmt(qs[1], 'x')}, on last-year ${what}` });
   };
-  compBar('Comps, EV / EBITDA', qEbitda, self.ebitda, perShareFromEv, 'EBITDA');
-  compBar('Comps, EV / revenue', qRev, self.rev, perShareFromEv, 'revenue');
-  compBar('Comps, P / E', qPe, self.ni, x => x / values.shares, 'net income');
+  compBar('ev_ebitda', 'Comps, EV / EBITDA', qEbitda, self.ebitda, perShareFromEv, 'EBITDA');
+  compBar('ev_rev', 'Comps, EV / revenue', qRev, self.rev, perShareFromEv, 'revenue');
+  compBar('pe', 'Comps, P / E', qPe, self.ni, x => x / values.shares, 'net income');
   if (co.price.lo52 && co.price.hi52) bars.push({ label: '52-week trading range', lo: co.price.lo52, mid: co.price.v, hi: co.price.hi52, basis: `52-week low and high, Yahoo Finance (${co.price.symbol}); mid line is the latest close` });
 
+  // Implied share price: the methods weighted by how well each fits, for the bear, base and bull cases
+  // (DCF cases; peer 25th, median and 75th percentile multiples).
+  const at = (k: number) => Object.fromEntries(bars.filter(b => b.key && !b.off).map(b => [b.key, [b.lo, b.mid, b.hi][k]])) as Partial<Record<Method, number>>;
+  const mixes = [0, 1, 2].map(k => blend(out.fit.verdict, at(k)));
+  const mix = mixes[CASES.findIndex(([c]) => c === a.scenario)], mixBase = mixes[1];
+  const s = res.scalar;
+  const caseName = a.scenario === 'downside' ? 'bear' : a.scenario === 'upside' ? 'bull' : 'base';
+  const kpis: [string, string, string][] = [
+    ['Implied share price', mix ? `${ccy}${fmt(mix.value, 'px')}` : 'n/m', mix ? `weighted DCF and comps, ${caseName} case; range ${mixes.map(m => (m ? fmt(m.value, 'px') : 'n/m')).join(' / ')}` : 'no method gives a meaningful value'],
+    ['Upside', mix ? fmt(mix.value / values.price - 1, 'pct') : 'n/m', `to the price of ${ccy}${fmt(values.price, 'px')}`],
+    ['DCF implied share price', dcfOff ? 'n/m' : `${ccy}${fmt(s.per_share, 'px')}`, dcfOff ? 'DCF not meaningful, no weight' : `${values.tv_mode ? 'exit multiple' : 'perpetuity growth'}, ${caseName} case`],
+    ['Enterprise value (DCF)', fmt(s.ev), `${ccy}m; at the price ${fmt(s.mkt_ev)}`],
+    ['WACC', fmt(s.wacc, 'pct'), values.wacc_mode ? 'entered' : `Ke ${fmt(s.ke, 'pct')}, debt ${fmt(s.w_d, 'pct')}`],
+    ['Terminal value', fmt(s.tv_share, 'pct'), `of DCF enterprise value; ${fmt(s.tv_mult_implied, 'x')} EBITDA`],
+  ];
+
   return (
+    <>
+    <div className="kpis">
+      {kpis.map(([l, v, sub]) => (
+        <div className={`card kpi${l === 'Implied share price' ? ' lead' : ''}`} key={l}><div className="label">{l}</div><div className="value">{v}</div><div className="sub">{sub}</div></div>
+      ))}
+    </div>
     <div className="card">
       <div className="vs-head">
         <h2 style={{ margin: 0 }}>Valuation summary</h2>
@@ -81,18 +104,22 @@ export function ValuationSummary({ co, a, def, values, res, ccy, onCase }: {
       <FitBanner fit={out.fit} ticker={co.ticker} />
       <FootballField bars={bars} price={values.price} ccy={ccy} />
       <div className="scroll-x"><table>
-        <thead><tr><th>Method ({ccy} per share)</th><th>Bear / low</th><th>Base / mid</th><th>Bull / high</th><th style={{ textAlign: 'left' }}>Basis</th></tr></thead>
+        <thead><tr><th>Method ({ccy} per share)</th><th>Bear / low</th><th>Base / mid</th><th>Bull / high</th><th>Weight</th><th style={{ textAlign: 'left' }}>Basis</th></tr></thead>
         <tbody>{bars.map(b => (
           <tr key={b.label} className={b.off ? 'muted' : ''}>
             <td>{b.label}</td>
             {b.off ? <td colSpan={3} style={{ textAlign: 'center' }}>{b.off}</td> : [b.lo, b.mid, b.hi].map((v, k) => <td key={k}>{fmt(v, 'px')}</td>)}
-            <td className="note" style={{ textAlign: 'left', whiteSpace: 'normal', minWidth: 240 }}>{b.basis}</td>
+            <td>{b.key && mixBase?.weights[b.key] ? fmt(mixBase.weights[b.key], 'pct') : '0%'}</td>
+            <td className="note" style={{ textAlign: 'left', whiteSpace: 'normal', minWidth: 240 }}>{b.basis}{!b.key && b.label.startsWith('DCF') ? ". Not weighted: with no peer multiple the exit uses the company's own multiple, which restates its price" : ''}{b.label.startsWith('52') ? ". Not weighted: it is the market's own price, the thing being tested" : ''}</td>
           </tr>
-        ))}</tbody>
+        ))}
+        {mixBase && <tr className="total"><td>Implied share price (weighted)</td>{mixes.map((m, k) => <td key={k}>{m ? fmt(m.value, 'px') : 'n/m'}</td>)}<td>100%</td><td className="note" style={{ textAlign: 'left', whiteSpace: 'normal' }}>{WHY[out.fit.verdict]} The weight of a method with no value is spread over the rest.</td></tr>}
+        </tbody>
       </table></div>
       <p className="note">Current price {ccy}{fmt(values.price, 'px')}. Bear and bull move year 1 growth by 3pt, the target EBIT margin by 10% and terminal growth by 0.5pt from the case shown{onCase ? '; the toggle switches the case the whole page uses (edits reset)' : ''}. Multiples apply to the last reported year through the same bridge as the DCF (debt, cash, non-controlling interests, preferred).</p>
       {peers && <PeersTable peers={peers.peers} basis={peers.basis} self={self} />}
     </div>
+    </>
   );
 }
 

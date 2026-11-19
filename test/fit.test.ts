@@ -17,3 +17,16 @@ test('quantile interpolates and ignores missing values', () => {
   assert.equal(quantile([10, 20], 0.25), 12.5);
   assert.equal(quantile([undefined], 0.5), undefined);
 });
+
+test('blend: weights follow the DCF fit and drop methods without a value', async () => {
+  const { blend } = await import('../src/engine/fit.ts');
+  const ok = blend('ok', { dcf_g: 100, dcf_x: 120, ev_ebitda: 80, pe: 100, ev_rev: 500 })!;
+  assert.equal(ok.weights.ev_rev, 0);
+  assert.ok(Math.abs(ok.value - 100) < 1e-9);
+  const no = blend('no', { dcf_g: -5, ev_ebitda: undefined, pe: undefined, ev_rev: 30 })!;
+  assert.equal(no.weights.ev_rev, 1);
+  assert.equal(no.value, 30);
+  const part = blend('ok', { dcf_g: 100, ev_ebitda: 50, pe: -1 })!;
+  assert.ok(Math.abs(part.weights.dcf_g - 0.5) < 1e-9 && Math.abs(part.value - 75) < 1e-9);
+  assert.equal(blend('ok', {}), undefined);
+});
