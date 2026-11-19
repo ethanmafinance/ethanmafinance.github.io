@@ -18,11 +18,11 @@ jobs:
       - run: npm ci
       - run: npm test
       # Keeps the committed data if a source is down, so a failed refresh never empties the site.
-      # Every NYSE and Nasdaq company that files with the SEC, from the SEC bulk company facts file (about 1.4 GB).
+      # Every NYSE and Nasdaq company that files with the SEC, from the SEC bulk company facts (about 1.4 GB) and submissions (1.6 GB, industry codes) files.
       - name: Refresh equity data
         run: |
           UA="${SEC_UA:-infrastructure-investment-modeling-platform contact@example.com}"
-          ( curl -sSfL --retry 3 -A "$UA" -o "$RUNNER_TEMP/cf.zip" https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip             && FACTS_ZIP="$RUNNER_TEMP/cf.zip" node scripts/equities.mjs --all ) || echo "equity refresh failed; using committed data"
+          ( curl -sSfL --retry 3 -A "$UA" -o "$RUNNER_TEMP/cf.zip" https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip             && curl -sSfL --retry 3 -A "$UA" -o "$RUNNER_TEMP/subs.zip" https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip             && FACTS_ZIP="$RUNNER_TEMP/cf.zip" SUBS_ZIP="$RUNNER_TEMP/subs.zip" node scripts/equities.mjs --all ) || echo "equity refresh failed; using committed data"
         env: { SEC_UA: '${{ vars.SEC_UA }}' }
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3

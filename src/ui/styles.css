@@ -273,3 +273,22 @@ a.chip.on:hover { transform: translateY(-1px); }
 .tint-indigo { gap: 1px; }
 .tint-indigo .widget-head { margin-bottom: 6px; }
 .build-bar { background: var(--surface); }
+
+/* Equity valuation summary: case toggle, DCF fit banner, football field */
+.vs-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.case-toggle { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.case-toggle button { border: 0; background: transparent; padding: 6px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; color: var(--text-2); }
+.case-toggle button.on { background: var(--navy); color: #fff; }
+.fit { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; border-left: 3px solid var(--good); background: var(--accent-soft); }
+.fit.caution { border-left-color: var(--warn); }
+.fit.no { border-left-color: var(--warn); background: var(--est-bg); }
+.fit ul { margin: 6px 0; padding-left: 18px; }
+.ff .ff-label { fill: var(--text-2); font-size: 12px; }
+.ff .ff-dcf { fill: var(--series-1); opacity: .85; }
+.ff .ff-comp { fill: #6a5acd; opacity: .8; }
+.ff .ff-mkt { fill: var(--muted); opacity: .6; }
+.ff .ff-mid { stroke: var(--text); stroke-width: 2; }
+.ff .ff-off { fill: var(--muted); font-size: 11.5px; font-style: italic; }
+.ff .ff-price { stroke: var(--series-2); stroke-width: 2; stroke-dasharray: 5 4; }
+.ff .ff-price-label { fill: var(--series-2); font-size: 11.5px; font-weight: 700; }
+tr.muted td { color: var(--muted); }

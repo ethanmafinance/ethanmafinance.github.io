@@ -123,6 +123,15 @@ async function factsOf(cik) {
   if (process.env.FACTS_ZIP) return JSON.parse(execFileSync('unzip', ['-p', process.env.FACTS_ZIP, `CIK${cik}.json`], { maxBuffer: 1 << 30 }).toString());
   return get(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`);
 }
+// Industry (SIC code) from the SEC submissions file: SUBS_ZIP = path to submissions.zip, else the API. Used to pick peers.
+async function sicOf(cik) {
+  try {
+    const d = process.env.SUBS_ZIP
+      ? JSON.parse(execFileSync('unzip', ['-p', process.env.SUBS_ZIP, `CIK${cik}.json`], { maxBuffer: 1 << 28 }).toString())
+      : await get(`https://data.sec.gov/submissions/CIK${cik}.json`);
+    return d.sic ? { sic: d.sic, sicDesc: d.sicDescription } : {};
+  } catch { return {}; }
+}
 
 async function rates() {
   const year = new Date().getUTCFullYear();
@@ -146,7 +155,7 @@ async function build(ticker, cikOf) {
   const { facts, entityName } = await factsOf(cik);
   if (!facts) throw new Error('no XBRL facts');
   // Banks and insurers: an unlevered DCF does not fit them.
-  const BANK = { 'us-gaap': ['InterestExpenseDeposits', 'NoninterestIncome', 'PremiumsEarnedNet', 'PolicyholderBenefitsAndClaimsIncurredNet'], 'ifrs-full': ['DepositsFromBanks', 'DepositsFromCustomers', 'InsuranceContractsThatAreLiabilities', 'LiabilitiesArisingFromInsuranceContracts'] };
+  const BANK = { 'us-gaap': ['InterestExpenseDeposits', 'NoninterestIncome', 'PremiumsEarnedNet', 'PolicyholderBenefitsAndClaimsIncurredNet'], 'ifrs-full': ['DepositsFromBanks', 'InsuranceContractsThatAreLiabilities', 'LiabilitiesArisingFromInsuranceContracts'] };
   if (Object.entries(BANK).some(([ns, list]) => list.some(c => facts[ns]?.[c]))) throw new Error('bank or insurer');
   // Reporting currency: the unit revenue is tagged in.
   const revConcept = FLOW.rev.find(c => facts['us-gaap']?.[c] || facts['ifrs-full']?.[c]);
@@ -196,7 +205,7 @@ async function build(ticker, cikOf) {
   if (!shares) throw new Error('no share count');
 
   const sym = cur === 'CAD' ? `${TSX[ticker] ?? ticker.replace(/-/g, '.')}.TO` : ticker.replace(/\./g, '-');
-  return { sym, rec: { ticker, name: entityName, cik: co.cik_str, currency: cur, fyEnds: ends, hist, bal, shares } };
+  return { sym, rec: { ticker, name: entityName, cik: co.cik_str, ...(await sicOf(cik)), currency: cur, fyEnds: ends, hist, bal, shares } };
 }
 
 // Step 2: price and beta from the spark data, in the reporting currency.
@@ -205,7 +214,7 @@ function priced({ sym, rec }, px, rf) {
   if (!q) throw new Error(`no price for ${sym}`);
   if (q.meta.currency !== rec.currency) throw new Error(`price in ${q.meta.currency}, filings in ${rec.currency}`);
   const index = rec.currency === 'CAD' ? '^GSPTSE' : '^GSPC';
-  const price = { v: +q.meta.regularMarketPrice.toFixed(4), date: new Date(q.meta.regularMarketTime * 1000).toISOString().slice(0, 10), symbol: sym, exchange: q.meta.fullExchangeName };
+  const price = { v: +q.meta.regularMarketPrice.toFixed(4), date: new Date(q.meta.regularMarketTime * 1000).toISOString().slice(0, 10), symbol: sym, exchange: q.meta.fullExchangeName, hi52: q.meta.fiftyTwoWeekHigh, lo52: q.meta.fiftyTwoWeekLow };
   return { ...rec, price, beta: beta(q, px[index], index), rf: rf[rec.currency], generated: new Date().toISOString().slice(0, 10) };
 }
 
@@ -247,3 +256,16 @@ let old = [];
 if (tickers.length) try { old = JSON.parse(await readFile(new URL('index.json', OUT), 'utf8')).tickers; } catch {}
 const merged = [...old.filter(o => !index.some(n => n.ticker === o.ticker) && !skipped.includes(o.ticker)), ...index].sort((a, b) => a.ticker.localeCompare(b.ticker));
 await writeFile(new URL('index.json', OUT), JSON.stringify({ generated: new Date().toISOString().slice(0, 10), rf, tickers: merged }));
+// Comps file: one compact row per company for peer multiples (same EV bridge as the DCF; EBITDA = EBIT + D&A, last fiscal year).
+const lastV = a => a?.at(-1)?.v;
+const debtV = b => (b.debt_total ? b.debt_total.v : (b.ltd?.v ?? 0) + (b.ltd_cur?.v ?? 0)) + (b.std?.v ?? 0);
+const compRows = [];
+for (const t of merged.map(i => i.ticker)) {
+  let d;
+  try { d = JSON.parse(await readFile(new URL(`${t}.json`, OUT), 'utf8')); } catch { continue; }
+  const mcap = d.price.v * d.shares.v, ev = mcap + debtV(d.bal) - (d.bal.cash?.v ?? 0) + (d.bal.nci?.v ?? 0) + (d.bal.pref?.v ?? 0);
+  const ebit = lastV(d.hist.ebit), da = lastV(d.hist.da);
+  const r = n => (n == null || !Number.isFinite(n) ? null : +n.toFixed(1));
+  compRows.push([t, d.sic ?? '', d.currency, r(mcap), r(ev), r(lastV(d.hist.rev)), ebit == null || da == null ? null : r(ebit + da), r(lastV(d.hist.ni)), d.fyEnds.at(-1)]);
+}
+await writeFile(new URL('comps.json', OUT), JSON.stringify({ fields: ['ticker', 'sic', 'currency', 'mcap', 'ev', 'rev', 'ebitda', 'ni', 'fy'], rows: compRows }));

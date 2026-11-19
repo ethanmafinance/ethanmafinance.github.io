@@ -42,3 +42,31 @@ export function impliedPerShare(c: Company, multiple: number) {
   const ebitda = v(lastOf(c.hist.ebit)) + v(lastOf(c.hist.da));
   return (multiple * ebitda - debtOf(c).v + v(c.bal.cash) - v(c.bal.nci) - v(c.bal.pref)) / c.shares.v;
 }
+
+// Peers from the comps file (public/data/eq/comps.json, one row per covered company).
+export type Row = { ticker: string; sic: string; currency: string; mcap: number; ev: number; rev: number | null; ebitda: number | null; ni: number | null; fy: string };
+export const rowsOf = (j: { fields: string[]; rows: unknown[][] }): Row[] => j.rows.map(r => Object.fromEntries(j.fields.map((f, k) => [f, r[k]])) as Row);
+// Multiples with nonsense removed: negative denominators and values above 100x are not meaningful.
+const ok = (v: number) => (Number.isFinite(v) && v > 0 && v <= 100 ? v : undefined);
+export const multiples = (r: Row) => ({
+  evEbitda: r.ebitda && r.ebitda > 0 ? ok(r.ev / r.ebitda) : undefined,
+  evRev: r.rev && r.rev > 0 ? ok(r.ev / r.rev) : undefined,
+  pe: r.ni && r.ni > 0 ? ok(r.mcap / r.ni) : undefined,
+});
+
+// The site's curated group if there is one; otherwise companies with the same SIC industry code (4, then 3, then 2 digits)
+// until at least 5 qualify, keeping the 10 closest in market value.
+export function pickPeers(self: Row, rows: Row[], n = 10): { peers: Row[]; basis: string } {
+  const group = groupOf(self.ticker);
+  if (group) return { peers: rows.filter(r => GROUPS[group].includes(r.ticker) && r.ticker !== self.ticker), basis: `the site's ${group.toLowerCase()} group` };
+  if (!self.sic) return { peers: [], basis: 'no industry code in the SEC data' };
+  for (const d of [4, 3, 2]) {
+    const code = self.sic.slice(0, d);
+    const c = rows.filter(r => r.ticker !== self.ticker && r.sic?.startsWith(code) && r.mcap > 0 && r.ev > 0);
+    if (c.length >= 5 || d === 2) {
+      const dist = (r: Row) => Math.abs(Math.log(r.mcap / Math.max(self.mcap, 1)));
+      return { peers: c.sort((a, b) => dist(a) - dist(b)).slice(0, n), basis: `SEC industry code ${code}${d < 4 ? ` (first ${d} digits of ${self.sic})` : ''}, the ${Math.min(n, c.length)} closest in market value` };
+    }
+  }
+  return { peers: [], basis: '' };
+}

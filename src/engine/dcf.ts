@@ -14,7 +14,8 @@ export type Company = {
   hist: Record<'rev' | 'ebit' | 'da' | 'capex' | 'cfo' | 'pretax' | 'tax' | 'ni' | 'int', Fact[]>;
   bal: Record<'cash' | 'debt_total' | 'ltd' | 'ltd_cur' | 'std' | 'nci' | 'pref', Fact>;
   shares: { v: number; asOf: string; concept: string; form: string; url: string };
-  price: { v: number; date: string; symbol: string; exchange: string };
+  price: { v: number; date: string; symbol: string; exchange: string; hi52?: number; lo52?: number };
+  sic?: string; sicDesc?: string;
   beta: { value: number; months: number; index: string; from: string; to: string; basis?: string };
   rf: { value: number; date: string; title: string; url: string };
   generated: string;
@@ -24,7 +25,8 @@ export type Answers = { years: number; scenario: 'base' | 'downside' | 'upside';
 export const HIST = 3;
 const STATUTORY = { USD: 0.21, CAD: 0.265 };
 // Scenario shifts (illustrative, est.): year 1 growth and target margin move together.
-export const SCENARIO = { base: [0, 1], downside: [-0.03, 0.9], upside: [0.03, 1.1] } as const;
+// Bear / base / bull: year 1 growth (pt), target EBIT margin (x), terminal growth (pt).
+export const SCENARIO = { base: [0, 1, 0], downside: [-0.03, 0.9, -0.005], upside: [0.03, 1.1, 0.005] } as const;
 
 const ERP: Source = { title: 'Damodaran, implied equity risk premium (FCFE) for the S&P 500, start of 2026', date: 'Jan 7, 2026', url: 'https://pages.stern.nyu.edu/~adamodar/pc/datasets/histimpl.xls' };
 const TARGET2: Source = { title: 'Bank of Canada and US Federal Reserve inflation targets, 2%', url: 'https://www.bankofcanada.ca/rates/indicators/key-variables/inflation-control-target/' };
@@ -70,7 +72,7 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
   const useEff = effTax >= 0.05 && effTax <= 0.4;
   const tax = useEff ? effTax : STATUTORY[c.currency];
   const cagr = (r[H - 1] / r[0]) ** (1 / (H - 1)) - 1;
-  const [dg, mm] = SCENARIO[a.scenario];
+  const [dg, mm, dgt] = SCENARIO[a.scenario];
   const g1 = clamp(cagr, -0.05, 0.25) + dg;
   const margins = e.map((m, k) => m / r[k]);
   const nopat = e.map(m => m * (1 - tax));
@@ -111,8 +113,8 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
     ...g('Forecast', [
       { id: 'g1', label: 'Revenue growth, forecast year 1', unit: '%', value: +g1.toFixed(4), fmt: 'pct',
         source: est(`FY${fy[0]} to FY${fy[H - 1]} revenue CAGR of ${pct(cagr)}${dg ? `, ${dg > 0 ? '+' : ''}${dg * 100}pt for the ${a.scenario} case` : ''}. No analyst consensus is used`) },
-      { id: 'g_term', label: 'Terminal growth (revenue growth fades to this by the last forecast year)', unit: '%', value: 0.02, fmt: 'pct',
-        source: est('long-run nominal growth at the 2% inflation target, no real growth', TARGET2) },
+      { id: 'g_term', label: 'Terminal growth (revenue growth fades to this by the last forecast year)', unit: '%', value: +(0.02 + dgt).toFixed(4), fmt: 'pct',
+        source: est(`long-run nominal growth at the 2% inflation target, no real growth${dgt ? `, ${dgt > 0 ? '+' : ''}${dgt * 100}pt for the ${a.scenario} case` : ''}`, TARGET2) },
       { id: 'm1', label: 'EBIT margin, forecast year 1', unit: '%', value: +margins[H - 1].toFixed(4), fmt: 'pct',
         source: est(`FY${fy[H - 1]} reported EBIT margin`) },
       { id: 'm_target', label: 'EBIT margin, last forecast year (target)', unit: '%', value: +(avg(margins) * mm).toFixed(4), fmt: 'pct',

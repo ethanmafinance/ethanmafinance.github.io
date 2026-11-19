@@ -10,7 +10,7 @@ import { BarChart, LineChart } from './Charts.tsx';
 import { Calibration, MemoCard, Rows } from './Memo.tsx';
 import { CasesPanel } from './Cases.tsx';
 import { SaveButton } from './Saved.tsx';
-import { comp, GROUPS, groupOf, impliedPerShare, median, type Comp } from '../engine/comps.ts';
+import { ValuationSummary } from './Valuation.tsx';
 
 type V = Record<string, number>;
 export type Listing = { ticker: string; name: string; currency: string; f?: number };
@@ -21,7 +21,7 @@ export const loadIndex = () => (indexCache ??= fetch(DATA + 'index.json').then(r
 
 const QUESTIONS: { key: keyof Answers; q: string; options: [string, string, string][] }[] = [
   { key: 'years', q: 'How many years should the explicit forecast run?', options: [['5', '5 years', 'Mature company: growth settles quickly'], ['10', '10 years', 'Still growing: a longer fade to the terminal rate']] },
-  { key: 'scenario', q: 'Which case?', options: [['base', 'Base', 'Growth and margins from reported history'], ['downside', 'Downside', 'Year 1 growth -3pt, target margin x0.9'], ['upside', 'Upside', 'Year 1 growth +3pt, target margin x1.1']] },
+  { key: 'scenario', q: 'Which case?', options: [['base', 'Base', 'Growth and margins from reported history'], ['downside', 'Bear', 'Year 1 growth -3pt, target margin x0.9, terminal growth -0.5pt'], ['upside', 'Bull', 'Year 1 growth +3pt, target margin x1.1, terminal growth +0.5pt']] },
   { key: 'wacc', q: 'How should the discount rate be set?', options: [['capm', 'Build it (CAPM)', 'Risk-free rate, beta and equity risk premium, weighted with debt'], ['direct', 'I will enter a WACC', 'Starts at 8%; change it in the assumptions']] },
   { key: 'terminal', q: 'How should the terminal value be set?', options: [['growth', 'Perpetuity growth', 'Value driver formula: growth, return on new capital, WACC'], ['multiple', 'Exit multiple', "EV / EBITDA, starting at today's trading multiple"]] },
 ];
@@ -165,6 +165,8 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
           <span className="head-actions"><SaveButton item={{ kind: 'equity', ticker: co.ticker, a, name: title ?? `${co.ticker} DCF`, values, headline: `${ccy}${fmt(res.scalar.per_share, 'px')} per share` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
         </div>
 
+        <ValuationSummary co={co} a={a} def={def} values={deferred} res={res} ccy={ccy} onCase={title ? undefined : c => { location.hash = hrefOf(co.ticker, { ...a, scenario: c }); }} />
+
         {missing.length > 0 && (
           <p className="card warn">Not tagged in this company's XBRL data: {missing.join(', ')}. Those years show 0 and the defaults that depend on them are placeholders. Enter the reported figures from the annual report under Reported financials before relying on the value.</p>
         )}
@@ -249,7 +251,6 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
           ['WACC', x => fmt(x.scalar.wacc, 'pct')], ['Terminal value share', x => fmt(x.scalar.tv_share, 'pct')], ['Implied EV / EBITDA', x => fmt(x.scalar.ev_ebitda, 'x')],
         ]} />
         {checks && <ChecksCard mod={{ checks } as Module} res={res} />}
-        <CompsCard co={co} ccy={ccy} />
         <MemoCard blocked={missing.length && !def.inputs.some(i => i.group === 'Reported financials' && values[i.id] !== defaults[i.id]) ? `Enter the figures missing from the XBRL data (${missing.join(', ')}) under Reported financials first; the value is not meaningful without them.` : undefined}
           title={title ?? `${co.name} (${co.ticker})`} sub={`Unlevered DCF, ${a.scenario} case, ${values.years}-year forecast. ${ccy} millions except per share. Filings to FY${co.fyEnds.at(-1)!.slice(0, 4)}; price ${co.price.date}.`} body={() => (
           <>
@@ -288,49 +289,3 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
 }
 
 // Trading comparables: the subject against its sector peers, each from its own latest SEC filing and closing price.
-function CompsCard({ co, ccy }: { co: Company; ccy: string }) {
-  const group = groupOf(co.ticker);
-  const [peers, setPeers] = useState<(Comp & { cur: string })[]>();
-  const [skipped, setSkipped] = useState<string[]>([]);
-  useEffect(() => {
-    if (!group) return;
-    let live = true;
-    Promise.all(GROUPS[group].map(t => fetch(`${DATA}${t}.json`).then(r => (r.ok ? r.json() : null)).catch(() => null)))
-      .then(cs => {
-        if (!live) return;
-        setPeers(cs.flatMap((c: Company | null) => { const x = c && comp(c); return x ? [{ ...x, cur: c!.currency }] : []; }));
-        setSkipped(GROUPS[group].filter((t, k) => !(cs[k] && comp(cs[k]))));
-      });
-    return () => { live = false; };
-  }, [group]);
-  if (!group) return null;
-  const others = (peers ?? []).filter(p => p.ticker !== co.ticker);
-  const med = { evEbitda: median(others.map(p => p.evEbitda)), evRev: median(others.map(p => p.evRev)), pe: median(others.map(p => p.pe)) };
-  const self = comp(co);
-  const x = (n?: number) => (n === undefined ? 'n/a' : fmt(n, 'x'));
-  return (
-    <div className="card">
-      <h2>Trading comparables: {group.toLowerCase()}</h2>
-      {!peers ? <p className="note">Loading peers...</p> : (
-        <>
-          <div className="scroll-x"><table>
-            <thead><tr><th>Company</th><th>EV (m)</th><th>EV / EBITDA</th><th>EV / revenue</th><th>P / E</th><th>Fiscal year</th></tr></thead>
-            <tbody>
-              {peers.map(p => (
-                <tr key={p.ticker} style={p.ticker === co.ticker ? { fontWeight: 700 } : undefined}>
-                  <td><a href={`#/equity/${p.ticker}`}>{p.ticker}</a></td><td>{p.cur === 'CAD' ? 'C$' : 'US$'}{fmt(p.ev)}</td><td>{x(p.evEbitda)}</td><td>{x(p.evRev)}</td><td>{x(p.pe)}</td><td>{p.fy}</td>
-                </tr>
-              ))}
-              <tr><td>Peer median (excluding {co.ticker})</td><td></td><td>{x(med.evEbitda)}</td><td>{x(med.evRev)}</td><td>{x(med.pe)}</td><td></td></tr>
-            </tbody>
-          </table></div>
-          {skipped.length > 0 && <p className="note">Not shown: {skipped.join(', ')} (operating income or price missing from the data).</p>}
-          {self?.evEbitda !== undefined && med.evEbitda !== undefined && (
-            <p>At the peer median EV / EBITDA of {fmt(med.evEbitda, 'x')}, {co.ticker} is worth {ccy}{fmt(impliedPerShare(co, med.evEbitda), 'px')} a share against a price of {ccy}{fmt(co.price.v, 'px')} (it trades at {fmt(self.evEbitda, 'x')}).</p>
-          )}
-        </>
-      )}
-      <p className="note">Each company from its latest annual SEC filing and the latest closing price. EV = market value of equity + debt - cash + non-controlling interests + preferred shares, the same bridge as the DCF. EBITDA = operating income + D&A for the last fiscal year (trailing, not forward). P / E uses net income including non-controlling interests where that is what the filing tags. n/a means a figure is missing or negative. Peer groups are this site's grouping.</p>
-    </div>
-  );
-}
