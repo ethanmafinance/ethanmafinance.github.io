@@ -13,7 +13,7 @@ const D20: Source = { title: 'DBRS, Dufferin Wind Power confirmation', date: 'Se
 const D23: Source = { title: 'DBRS, Dufferin Wind Power confirmation', date: 'Oct 11, 2023', url: 'https://dbrs.morningstar.com/research/421700/dbrs-morningstar-confirms-credit-ratings-on-dufferin-wind-power-inc-at-bbb-high-with-stable-trends' };
 const D24: Source = { title: 'Morningstar DBRS, Dufferin Wind Power confirmation', date: 'Oct 7, 2024', url: 'https://dbrs.morningstar.com/research/440874/morningstar-dbrs-confirms-dufferin-wind-power-inc-at-bbb-high-with-stable-trends' };
 const D20R: Source = { title: 'DBRS, Dufferin Wind Power rating report', date: 'Sep 2020', url: 'https://dbrs.morningstar.com/research/367761/dufferin-wind-power-inc-rating-report' };
-const K2: Source = { title: 'ReNew Canada, K2 Wind project: $850 million, 270 MW, Ontario, COD 2015', url: 'https://www.renewcanada.net/the-projects/k2-wind-project/' };
+const K2: Source = { title: 'Capital Power, 2014 Annual Information Form (SEC Form CB, Exhibit 2.1): K2 Wind total estimated project cost $930 million, 270 MW, Ontario', date: 'Mar 4, 2015', url: 'https://www.sec.gov/Archives/edgar/data/1659037/000157104915009482/t83681_ex2-1.htm' };
 const CRA43: Source = { title: 'Canada Revenue Agency, classes of depreciable property: Class 43.2 (50%) for clean energy generation', url: 'https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/sole-proprietorships-partnerships/report-business-income-expenses/claiming-capital-cost-allowance/classes-depreciable-property.html' };
 const IESO: Source = { title: 'IESO, 2024 year in review: average weighted HOEP 3.37 cents/kWh', url: 'https://www.ieso.ca/Corporate-IESO/Media/Year-End-Data/2024' };
 const BOC: Source = { title: 'Bank of Canada, inflation-control target (2% midpoint)', url: 'https://www.bankofcanada.ca/rates/indicators/key-variables/inflation-control-target/' };
@@ -35,7 +35,7 @@ export const renewables: Module = {
     start_year: { value: 2015, source: est('bonds issued Oct 22, 2015, about 11 months after commercial operation (Dec 1, 2014); the model starts at the refinancing, with the build cost as year 1 spend', D20R) },
     con_years: { value: 1, source: est('operating asset: one period holds the build cost and the bond close') },
     ops_years: { value: 19, source: est('FIT contract to Nov 30, 2034; 2016 to 2034 in annual periods', D15) },
-    capex: { value: 287.7, source: est('C$3,148 per kW (K2 Wind: $850 million for 270 MW, Ontario, built 2014 to 2015) times 91.4 MW; Dufferin\'s own cost is not public. Drives equity returns only, not the debt', K2) },
+    capex: { value: 314.8, source: est("C$3,444 per kW (K2 Wind: total estimated project cost $930 million for 270 MW, Ontario, built 2014 to 2015; Capital Power's one-third share was still $310 million in its Q3 2015 MD&A, after COD) times 91.4 MW. Dufferin's own cost is not public. The $850 million often quoted for K2 is its construction loan, not its cost. Excludes construction interest. A lower comparable: Port Dover and Nanticoke (105 MW, Ontario, 2013) at about $288 million, C$2,743 per kW. Drives equity returns only, not the debt", K2) },
     capex_esc: { value: 0, source: est('already built') },
     capex_p1: { value: 1, source: est('all in the first period') },
     capex_p2: { value: 0, source: est('already built') },
