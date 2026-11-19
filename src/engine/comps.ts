@@ -44,7 +44,7 @@ export function impliedPerShare(c: Company, multiple: number) {
 }
 
 // Peers from the comps file (public/data/eq/comps.json, one row per covered company).
-export type Row = { ticker: string; sic: string; currency: string; mcap: number; ev: number; rev: number | null; ebitda: number | null; ni: number | null; fy: string };
+export type Row = { ticker: string; sic: string; currency: string; mcap: number; ev: number; rev: number | null; ebitda: number | null; ni: number | null; fy: string; beta?: number | null };
 export const rowsOf = (j: { fields: string[]; rows: unknown[][] }): Row[] => j.rows.map(r => Object.fromEntries(j.fields.map((f, k) => [f, r[k]])) as Row);
 // Multiples with nonsense removed: negative denominators and values above 100x are not meaningful.
 const ok = (v: number) => (Number.isFinite(v) && v > 0 && v <= 100 ? v : undefined);

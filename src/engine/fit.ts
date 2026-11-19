@@ -13,6 +13,7 @@ export function dcfFit(x: { rev: number[]; ebit: number[]; capex: number[]; fcfF
   if (capexShare > 0.5) caution.push(`Heavy build-out: capex was ${pct(capexShare)} of revenue in the latest year, so current cash flow says little about steady-state cash flow.`);
   const cagr = (x.rev[n - 1] / x.rev[0]) ** (1 / Math.max(1, n - 1)) - 1;
   if (cagr > 0.4) caution.push(`Revenue grew ${pct(cagr)} a year over the history, too fast for history to be a reliable guide to the forecast.`);
+  else if (cagr > 0.2) caution.push(`Revenue grew ${pct(cagr)} a year. A fast grower usually stays fast for longer than a 5-year fade assumes: try a 10-year forecast, and read "What the price implies" for the growth the market is paying for.`);
   if (lossYears > 0 && !no.length) caution.push(`An operating loss in ${lossYears} of the last ${n} years.`);
   if (x.tvShare > 0.85 && x.ev > 0) caution.push(`The terminal value is ${pct(x.tvShare)} of enterprise value, so the result turns mostly on the long-run assumptions.`);
   return no.length ? { verdict: 'no', reasons: [...no, ...caution] } : { verdict: caution.length ? 'caution' : 'ok', reasons: caution };

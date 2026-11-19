@@ -54,7 +54,7 @@ export function App() {
   const mod = route.startsWith('model/') ? LIVE[route.slice(6) as keyof typeof LIVE] : isExample ? LIVE[route.slice(8) as keyof typeof LIVE] : undefined;
   const eq = route.startsWith('equity') ? parseEquityRoute(route) : undefined;
   const saved = route.startsWith('saved/') ? readSaved().find(x => x.sid === route.slice(6)) : undefined;
-  const page = saved ? 'saved' : mod ? 'model' : eq ? 'equity' : (['infra', 'markets', 'portfolio', 'how'] as const).find(p => p === route) ?? 'home';
+  const page = saved ? 'saved' : mod ? 'model' : eq ? 'equity' : (['infra', 'markets', 'portfolio', 'how', 'examples'] as const).find(p => p === route) ?? 'home';
   const nav: [string, string, boolean][] = [
     ['#/', 'Dashboard', page === 'home'],
     ['#/infra', 'Infrastructure', page === 'infra' || page === 'model'],
@@ -85,6 +85,7 @@ export function App() {
         {page === 'portfolio' && <PortfolioPage />}
         {page === 'infra' && <InfraPicker />}
         {page === 'home' && <Dashboard />}
+        {page === 'examples' && <ExamplesPage />}
       </main>
       <footer>Built from public sources only. Figures marked est. are estimates with the method shown. Not investment advice.</footer>
     </>
@@ -133,15 +134,15 @@ function Dashboard() {
           <div className="widget-head"><h3>Market stats</h3><span className="tag live">Live</span></div>
           {market.data ? <MarketTiles data={market.data} /> : <span className="note">{market.error ? 'Bank of Canada data could not load.' : 'Loading Bank of Canada data...'}</span>}
         </a>
-        <div className="glass side tint-indigo">
-          <div className="widget-head"><h3>Valuation case studies</h3><span className="tag">{examples.length + eqExamples.length} verified</span></div>
+        <div className="glass side tint-indigo clickable" role="link" tabIndex={0} onClick={() => go('#/examples')} onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) go('#/examples'); }}>
+          <div className="widget-head"><h3>Example valuation cases</h3><span className="tag">{examples.length + eqExamples.length} verified</span></div>
           {examples.map(e => (
-            <a key={e.mod.id} className="example" href={`#/example/${e.mod.id}`}><strong>{e.name}</strong><span>{e.meta}</span></a>
+            <a key={e.mod.id} className="example" href={`#/example/${e.mod.id}`} onClick={ev => ev.stopPropagation()}><strong>{e.name}</strong><span>{e.meta}</span></a>
           ))}
           {eqExamples.map(e => (
-            <a key={e.id} className="example" href={`#/equity/example/${e.id}`}><strong>{e.name.split(':')[0]}</strong><span>{e.meta}</span></a>
+            <a key={e.id} className="example" href={`#/equity/example/${e.id}`} onClick={ev => ev.stopPropagation()}><strong>{e.name.split(':')[0]}</strong><span>{e.meta}</span></a>
           ))}
-          {!examples.length && <span className="note">Case studies appear once they match their published figures.</span>}
+          {!examples.length && <span className="note">Cases appear once they match their published figures.</span>}
         </div>
         <a className="glass side tint-slate" href="#/portfolio">
           <div className="widget-head"><h3>Portfolio</h3><span className="tag live">Live</span></div>
@@ -153,11 +154,39 @@ function Dashboard() {
   );
 }
 
+// Every verified example on one page: what it is, what it was rebuilt from, and how many published figures it matches.
+function ExamplesPage() {
+  const examples = useMemo(() => EXAMPLES.filter(e => verified(e.mod)), []);
+  const eqExamples = useMemo(() => EQUITY_EXAMPLES.filter(equityVerified), []);
+  const matched = (checks: { info?: boolean }[] | undefined) => (checks ?? []).filter(c => !c.info).length;
+  const cards = [
+    ...examples.map(e => ({ key: e.mod.id, href: `#/example/${e.mod.id}`, kind: e.mod.name, name: e.name, meta: e.meta, what: e.what, n: matched(e.mod.checks) })),
+    ...eqExamples.map(e => ({ key: e.id, href: `#/equity/example/${e.id}`, kind: 'Listed equity DCF', name: e.name.split(':')[0], meta: e.meta, what: e.name.split(':').slice(1).join(':').trim(), n: matched(e.checks) })),
+  ];
+  return (
+    <>
+      <h1>Example valuation cases</h1>
+      <p className="lede">Real assets and companies, rebuilt end to end on the platform from public sources. Each case is shown only while the model reproduces every published figure it is checked against, so the numbers can be traced and trusted. Open one to see the full model, analysis and Excel download.</p>
+      <div className="grid-cards cases-grid">
+        {cards.map(c => (
+          <a key={c.key} className="card module-card case-card" href={c.href}>
+            <span className="eyebrow-dark">{c.kind}</span>
+            <strong>{c.name}</strong>
+            <span className="note">{c.meta}</span>
+            <span>{c.what}</span>
+            <span className="tag live">{c.n} published figures matched</span>
+          </a>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function InfraPicker() {
   return (
     <>
       <h1>Value infrastructure</h1>
-      <p className="lede">Choose an asset class. Each one opens an empty model: you enter the deal inputs and the platform builds the model and analysis. To see a finished one first, open a valuation case study from the dashboard.</p>
+      <p className="lede">Choose an asset class. Each one opens an empty model: you enter the deal inputs and the platform builds the model and analysis. To see a finished one first, open one of the <a href="#/examples">example valuation cases</a>.</p>
       <div className="grid-cards">
         {ASSETS.map(a => a.id ? (
           <a key={a.name} className="card module-card" href={`#/model/${a.id}`}>

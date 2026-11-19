@@ -69,7 +69,7 @@ export function Builder({ mod, example }: { mod: Module; example?: string }) {
           <li><b>2</b><span><strong>Press Build model.</strong> The platform builds the full model and analysis on your inputs.</span></li>
           <li><b>3</b><span><strong>Review and export.</strong> Returns, debt metrics, sensitivities, a memo and an Excel model with live formulas. Save it to your portfolio.</span></li>
         </ol>
-        {example && <p className="note">Want to see a finished model first? <a href={`#/example/${mod.id}`}>Open the {example} case study</a>.</p>}
+        {example && <p className="note">Want to see a finished model first? <a href={`#/example/${mod.id}`}>Open the {example} example case</a>.</p>}
       </section>
 
       <div className="build-grid">

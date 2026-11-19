@@ -2,7 +2,7 @@
 // (DCF on perpetuity growth and on an exit multiple, trading comparables on three multiples, 52-week range) and the peer table.
 import { useEffect, useMemo, useState } from 'react';
 import { Model, type ModelDef } from '../engine/sheet.ts';
-import { SCENARIO, type Answers, type Company } from '../engine/dcf.ts';
+import { SCENARIO, shiftMargin, type Answers, type Company } from '../engine/dcf.ts';
 import { dcfFit, quantile } from '../engine/fit.ts';
 import { multiples, pickPeers, rowsOf, type Row } from '../engine/comps.ts';
 import { fmt } from './ModelPage.tsx';
@@ -41,7 +41,7 @@ export function ValuationSummary({ co, a, def, values, res, ccy, onCase }: {
   const out = useMemo(() => {
     const m = new Model(def, values);
     const cur = SCENARIO[a.scenario];
-    const caseVals = (s: Case): V => { const c = SCENARIO[s]; return { ...values, g1: values.g1 + c[0] - cur[0], m_target: values.m_target * c[1] / cur[1], g_term: values.g_term + c[2] - cur[2] }; };
+    const caseVals = (s: Case): V => { const c = SCENARIO[s]; return { ...values, g1: values.g1 + c[0] - cur[0], m_target: shiftMargin(values.m_target / (1 + (cur[1] - 1) * Math.sign(values.m_target)), c[1]), g_term: values.g_term + c[2] - cur[2] }; };
     const run = (v: V) => { m.set(v); return m.results(); };
     const perp = CASES.map(([s]) => run({ ...caseVals(s), tv_mode: 0 }).scalar.per_share);
     const exitM = qEbitda ?? ([0.8, 1, 1.2].map(f => values.exit_mult * f) as unknown as readonly [number, number, number]);

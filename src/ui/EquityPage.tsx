@@ -19,6 +19,50 @@ export const DATA = './data/eq/';
 let indexCache: Promise<{ generated: string; tickers: Listing[] }> | undefined;
 export const loadIndex = () => (indexCache ??= fetch(DATA + 'index.json').then(r => { if (!r.ok) throw new Error('index'); return r.json(); }));
 
+// Why a listed ticker is not covered (coverage.json, written by the data script for every US-listed stock).
+type Coverage = { generated: string; listed: number; covered: number; notCovered: [string, string, string][] };
+let coverageCache: Promise<Coverage | null> | undefined;
+const loadCoverage = () => (coverageCache ??= fetch(DATA + 'coverage.json').then(r => (r.ok ? r.json() : null), () => null));
+const plain = (why: string) =>
+  why === 'bank or insurer' ? 'it is a bank or insurer. Lenders and insurers are valued on equity, book value and earnings, not an unlevered DCF, so the site does not model them.'
+  : /^(no revenue|revenue tagged)/.test(why) ? 'its SEC filings report no revenue (usually a fund, a SPAC or a pre-revenue company), so there is nothing to forecast.'
+  : why.startsWith('latest annual XBRL data is for') ? `its newest annual results are not yet in the SEC's structured (XBRL) data; the latest there is for ${why.slice(31)}, too old to value on.`
+  : why.startsWith('fewer than 2 years') ? 'the SEC data has fewer than 2 years of annual results (usually a recent listing).'
+  : why.startsWith('share count does not reconcile') ? `the share count in its filings does not reconcile with the US listing ${why.slice(why.indexOf('('))}, so a per-share value could be wrong.`
+  : why;
+const shortName = (n: string) => n.replace(/\s+(Common Stock|Common Shares|Ordinary Shares|Class [A-Z]|American Depositary|Capital Stock|New York Registry|Depositary).*$/i, '').replace(/\.$/, '');
+function useCoverageNote(t: string, covered: boolean) {
+  const [cov, setCov] = useState<Coverage | null>();
+  useEffect(() => { if (t && !covered) loadCoverage().then(setCov); }, [t, covered]);
+  if (!t || covered || cov === undefined) return undefined;
+  const hit = cov?.notCovered.find(n => n[0] === t);
+  if (!hit) return cov ? <>{t} is not listed on Nasdaq, NYSE or NYSE American (checked against all {cov.listed.toLocaleString('en-CA')} US-listed stocks, {cov.generated}). TSX-only companies are not covered.</> : <>{t} is not covered.</>;
+  const [, full, why] = hit;
+  const name = shortName(full);
+  if (why.startsWith('alias:')) return <>{name} is another share class of <a href={`#/equity?ticker=${why.slice(6)}`}>{why.slice(6)}</a>; value it under {why.slice(6)}.</>;
+  return <>{name} ({t}) is not covered: {plain(why)}</>;
+}
+
+// Search box shown on every equity page so a new ticker is one step away.
+function TickerBar({ a, current }: { a: Answers; current?: string }) {
+  const [list, setList] = useState<Listing[]>();
+  const [ticker, setTicker] = useState('');
+  useEffect(() => { loadIndex().then(d => setList(d.tickers), () => setList([])); }, []);
+  const t = ticker.trim().toUpperCase();
+  const known = list?.some(l => l.ticker === t) ?? false;
+  const note = useCoverageNote(t, known || !list);
+  return (
+    <form className="card ticker-bar" onSubmit={e => { e.preventDefault(); if (known && t !== current) location.hash = hrefOf(t, a); }}>
+      <label><span className="sr-only">Value another company</span>
+        <input list="eq-tickers-bar" value={ticker} onChange={e => setTicker(e.target.value)} placeholder="Value another ticker, e.g. NBIS" autoCapitalize="characters" autoComplete="off" spellCheck={false} aria-label="Ticker" />
+        <datalist id="eq-tickers-bar">{list?.map(l => <option key={l.ticker} value={l.ticker}>{l.name}</option>)}</datalist>
+      </label>
+      <button className="btn primary" disabled={!known}>Value</button>
+      {t && <div className="note">{known ? `${shortName(list!.find(l => l.ticker === t)!.name)}. Press Value; the same four answers are kept.` : note}</div>}
+    </form>
+  );
+}
+
 const QUESTIONS: { key: keyof Answers; q: string; options: [string, string, string][] }[] = [
   { key: 'years', q: 'How many years should the explicit forecast run?', options: [['5', '5 years', 'Mature company: growth settles quickly'], ['10', '10 years', 'Still growing: a longer fade to the terminal rate']] },
   { key: 'scenario', q: 'Which case?', options: [['base', 'Base', 'Growth and margins from reported history'], ['downside', 'Bear', 'Year 1 growth -3pt, target margin x0.9, terminal growth -0.5pt'], ['upside', 'Bull', 'Year 1 growth +3pt, target margin x1.1, terminal growth +0.5pt']] },
@@ -49,6 +93,7 @@ export function EquityStart({ prefill = '' }: { prefill?: string }) {
   useEffect(() => { loadIndex().then(d => setList(d.tickers), () => setErr(true)); }, []);
   const t = ticker.trim().toUpperCase();
   const known = list?.find(l => l.ticker === t);
+  const why = useCoverageNote(t, !!known || !list);
   return (
     <>
       <h1>Value a listed company</h1>
@@ -60,7 +105,7 @@ export function EquityStart({ prefill = '' }: { prefill?: string }) {
           <datalist id="eq-tickers">{list?.map(l => <option key={l.ticker} value={l.ticker}>{l.name}</option>)}</datalist>
         </label>
         <div className="note">
-          {err ? 'The company list could not load.' : !list ? 'Loading the company list...' : known ? `${known.name}, reports in ${known.currency}.` : t ? `${t} is not covered. Coverage is NYSE and Nasdaq companies that file annual reports with the SEC (${list.length.toLocaleString('en-CA')} companies), excluding banks and insurers; TSX-only companies are not included.` : `${list.length.toLocaleString('en-CA')} companies covered: NYSE and Nasdaq SEC filers, including Canadian companies that file 40-F reports.`}
+          {err ? 'The company list could not load.' : !list ? 'Loading the company list...' : known ? `${shortName(known.name)}.` : t ? (why ?? 'Checking...') : `${list.length.toLocaleString('en-CA')} companies covered: US-listed (Nasdaq, NYSE, NYSE American) companies that file annual reports with the SEC, including Canadian and other foreign companies. Banks, insurers, funds and SPACs are excluded.`}
         </div>
         {QUESTIONS.map(qn => (
           <fieldset key={qn.key} className="eq-q">
@@ -93,12 +138,22 @@ export function EquityModel({ ticker, a, start }: { ticker: string; a: Answers; 
   const [co, setCo] = useState<Company | null>();
   useEffect(() => {
     let live = true;
+    setCo(undefined); // never show the previous company's numbers under the new ticker
     fetch(`${DATA}${ticker}.json`).then(r => (r.ok ? r.json() : null)).then(d => live && setCo(d), () => live && setCo(null));
     return () => { live = false; };
   }, [ticker]);
-  if (co === undefined) return <p className="note">Loading {ticker}...</p>;
-  if (co === null) return <div className="card"><h1>{ticker} is not covered</h1><p className="note">Only companies in the data file can be valued. <a href="#/equity">Choose another ticker</a>.</p></div>;
-  return <EquityView key={ticker + JSON.stringify(a)} co={co} a={a} start={start} />;
+  return (
+    <>
+      <TickerBar a={a} current={ticker} />
+      {co === undefined ? <p className="note">Loading {ticker}...</p>
+        : co === null ? <NotCovered t={ticker} />
+        : <EquityView key={co.ticker + JSON.stringify(a)} co={co} a={a} start={start} />}
+    </>
+  );
+}
+function NotCovered({ t }: { t: string }) {
+  const why = useCoverageNote(t, false);
+  return <div className="card"><h1>{t} is not covered</h1><p className="note">{why ?? 'Checking...'}</p></div>;
 }
 
 const WACC_STEPS = [-0.01, -0.005, 0, 0.005, 0.01];
@@ -160,7 +215,7 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
         <div className="card" style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <div>
             <h1 style={{ fontSize: 22, margin: 0 }}>{title ?? `${co.name} (${co.ticker})`}</h1>
-            <div className="note">Unlevered DCF, {a.scenario} case, {values.years}-year forecast, {values.tv_mode ? 'exit multiple' : 'perpetuity growth'} terminal value. {ccy} millions except per share. Filings to FY{co.fyEnds.at(-1)!.slice(0, 4)}; price {co.price.date}. <a href="#/equity">Change ticker or answers</a></div>
+            <div className="note">Unlevered DCF, {a.scenario} case, {values.years}-year forecast, {values.tv_mode ? 'exit multiple' : 'perpetuity growth'} terminal value. {ccy} millions except per share. Filings to FY{co.fyEnds.at(-1)!.slice(0, 4)}; price {co.price.date}.{co.fx ? ` Reported in ${co.fx.from}; translated at ${co.fx.rate} US$ per ${co.fx.from} (${co.fx.date}).` : ''}{co.shares.adr ? ` Per ADS (${co.shares.adr} ordinary shares each).` : ''} <a href="#/equity">Change ticker or answers</a></div>
           </div>
           <span className="head-actions"><SaveButton item={{ kind: 'equity', ticker: co.ticker, a, name: title ?? `${co.ticker} DCF`, values, headline: `${ccy}${fmt(res.scalar.per_share, 'px')} per share` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
         </div>

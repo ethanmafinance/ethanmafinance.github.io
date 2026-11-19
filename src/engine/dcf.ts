@@ -13,10 +13,12 @@ export type Company = {
   ticker: string; name: string; cik: number; currency: 'USD' | 'CAD'; fyEnds: string[];
   hist: Record<'rev' | 'ebit' | 'da' | 'capex' | 'cfo' | 'pretax' | 'tax' | 'ni' | 'int', Fact[]>;
   bal: Record<'cash' | 'debt_total' | 'ltd' | 'ltd_cur' | 'std' | 'nci' | 'pref', Fact>;
-  shares: { v: number; asOf: string; concept: string; form: string; url: string };
+  shares: { v: number; asOf: string; concept: string; form: string; url: string; adr?: number };
   price: { v: number; date: string; symbol: string; exchange: string; hi52?: number; lo52?: number };
   sic?: string; sicDesc?: string;
-  beta: { value: number; months: number; index: string; from: string; to: string; basis?: string };
+  beta: { value: number; months: number; index: string; from: string; to: string; basis?: string;
+    bottomUp?: { value: number; unlevered: number; n: number; de: number; tax: number; peers: string } };
+  fx?: { from: string; rate: number; date: string; symbol: string };
   rf: { value: number; date: string; title: string; url: string };
   generated: string;
 };
@@ -37,10 +39,15 @@ const STAT: Record<string, Source> = {
 };
 
 const est = (note: string, base?: Source): Source => ({ ...(base ?? { title: '' }), est: true, note });
+// Set per company: figures reported in another currency are translated to USD at one spot rate (see the data script).
+let fxNote = '';
 const factSrc = (f: Fact, what: string): Source | undefined =>
-  f ? { title: `SEC ${f.form}${f.filed ? ` filed ${f.filed}` : ''}`, note: `${what}, XBRL ${f.concept}`, url: f.url } : undefined;
+  f ? { title: `SEC ${f.form}${f.filed ? ` filed ${f.filed}` : ''}`, note: `${what}, XBRL ${f.concept}${fxNote}`, url: f.url } : undefined;
 const avg = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
+// Scenario margin: bull raises and bear lowers the margin by a share of its size, also when it is negative (x0.9 would raise a loss).
+export const shiftMargin = (m: number, f: number) => m + (f - 1) * Math.abs(m);
 
 // Sum of the debt components the filing tags. Total if tagged; otherwise non-current + current portion; plus short-term borrowings.
 export function debtOf(c: Company) {
@@ -53,6 +60,7 @@ export function debtOf(c: Company) {
 export type Overrides = Record<string, { value: number; source?: Source }>;
 
 export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelDef; missing: string[] } {
+  fxNote = c.fx ? `; reported in ${c.fx.from}, translated at ${c.fx.rate} USD per ${c.fx.from} (Yahoo Finance ${c.fx.symbol}, ${c.fx.date})` : '';
   const H = c.fyEnds.length >= HIST ? HIST : c.fyEnds.length;
   const last = c.fyEnds.slice(-H);
   const fy = last.map(e => +e.slice(0, 4));
@@ -117,8 +125,8 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
         source: est(`long-run nominal growth at the 2% inflation target, no real growth${dgt ? `, ${dgt > 0 ? '+' : ''}${dgt * 100}pt for the ${a.scenario} case` : ''}`, TARGET2) },
       { id: 'm1', label: 'EBIT margin, forecast year 1', unit: '%', value: +margins[H - 1].toFixed(4), fmt: 'pct',
         source: est(`FY${fy[H - 1]} reported EBIT margin`) },
-      { id: 'm_target', label: 'EBIT margin, last forecast year (target)', unit: '%', value: +(avg(margins) * mm).toFixed(4), fmt: 'pct',
-        source: est(`${H}-year average reported margin of ${pct(avg(margins))}${mm !== 1 ? `, x${mm} for the ${a.scenario} case` : ''}`) },
+      { id: 'm_target', label: 'EBIT margin, last forecast year (target)', unit: '%', value: +shiftMargin(med(margins), mm).toFixed(4), fmt: 'pct',
+        source: est(`median of the last ${H} reported margins, ${pct(med(margins))} (${margins.map(pct).join(', ')}): the median ignores one unusual year, such as a loss year or a peak${mm !== 1 ? `; ${mm > 1 ? '+' : '-'}${Math.round(Math.abs(mm - 1) * 100)}% of its size for the ${a.scenario} case` : ''}`) },
       { id: 'da_pct', label: 'Depreciation and amortization', unit: '% of revenue', value: +(avg(d) / avg(r)).toFixed(4), fmt: 'pct',
         source: est(`${H}-year reported average`) },
       { id: 'reinv1', label: 'Reinvestment rate, forecast year 1: (capex - D&A) / NOPAT', unit: '%', value: capexOk ? +reinv.toFixed(4) : +(0.02 / 0.08).toFixed(4), fmt: 'pct',
@@ -132,8 +140,15 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       { id: 'wacc_mode', label: 'WACC method (0 = CAPM build-up below, 1 = enter WACC directly)', unit: 'flag', value: a.wacc === 'direct' ? 1 : 0, fmt: 'flag', min: 0, max: 1, step: 1, source: est('chosen when the model was built') },
       { id: 'wacc_in', label: 'WACC entered directly', unit: '%', value: 0.08, fmt: 'pct', source: est('used only when the method is 1') },
       { id: 'rf', label: `Risk-free rate (${c.currency === 'CAD' ? 'Government of Canada' : 'US Treasury'} 10-year)`, unit: '%', value: c.rf.value, fmt: 'pct', source: { title: c.rf.title, date: c.rf.date, url: c.rf.url } },
-      { id: 'beta', label: 'Equity beta (adjusted)', unit: 'x', value: +(0.67 * c.beta.value + 0.33).toFixed(3), fmt: 'x',
-        source: est(`Blume adjustment 0.67 x raw + 0.33 (betas drift toward 1; the convention behind Bloomberg's adjusted beta). Raw beta ${c.beta.value.toFixed(2)}: regression of ${c.beta.months} monthly ${c.beta.basis === 'monthly price returns' ? 'price' : 'total'} returns, ${c.beta.from} to ${c.beta.to}, on the ${c.beta.index === '^GSPTSE' ? 'S&P/TSX Composite' : 'S&P 500'} (Yahoo Finance ${c.beta.basis === 'monthly price returns' ? 'monthly closes, not adjusted for dividends' : 'adjusted closes'})`) },
+      (() => {
+        const raw = `${c.beta.value.toFixed(2)} from ${c.beta.basis?.startsWith('market beta') ? c.beta.basis : `a regression of ${c.beta.months} monthly ${c.beta.basis === 'monthly price returns' ? 'price' : 'total'} returns, ${c.beta.from} to ${c.beta.to}, on the ${c.beta.index === '^GSPTSE' ? 'S&P/TSX Composite' : 'S&P 500'} (Yahoo Finance)`}`;
+        const bu = c.beta.bottomUp;
+        return bu
+          ? { id: 'beta', label: 'Equity beta (bottom-up, from peers)', unit: 'x', value: +(0.67 * bu.value + 0.33).toFixed(3), fmt: 'x' as const,
+              source: est(`Blume-adjusted (0.67 x + 0.33) bottom-up beta of ${bu.value.toFixed(2)}: median unlevered beta of ${bu.n} peers (${bu.peers}), ${bu.unlevered.toFixed(2)}, relevered at ${c.ticker}'s net debt / equity of ${bu.de.toFixed(2)} with a ${bu.tax * 100}% tax rate: beta_L = beta_U x (1 + (1 - t) x D/E) (Damodaran, bottom-up beta). A single company's 5-year regression is noisy; ${c.ticker}'s own raw beta is ${raw}`) }
+          : { id: 'beta', label: 'Equity beta (adjusted)', unit: 'x', value: +(0.67 * c.beta.value + 0.33).toFixed(3), fmt: 'x' as const,
+              source: est(`Blume adjustment 0.67 x raw + 0.33 (betas drift toward 1; the convention behind Bloomberg's adjusted beta); fewer than 5 peers for a bottom-up beta. Raw beta ${raw}`) };
+      })(),
       { id: 'erp', label: 'Equity risk premium', unit: '%', value: 0.0423, fmt: 'pct', source: ERP },
       { id: 'kd', label: 'Pre-tax cost of debt', unit: '%', value: +kd.toFixed(4), fmt: 'pct',
         source: int && debt.v > 0 ? est(`FY${fy[H - 1]} interest (${int.concept.split(':')[1]}) / year-end debt, held between the risk-free rate and 5pt above it`) : est('risk-free rate plus 1.5pt: interest expense is not tagged') },
@@ -144,7 +159,7 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       { id: 'cash', label: 'Cash and cash equivalents', unit: cur, value: v(c.bal.cash), fmt: 'num', source: factSrc(c.bal.cash, 'Cash') ?? est('not tagged') },
       { id: 'nci', label: 'Non-controlling interests', unit: cur, value: v(c.bal.nci), fmt: 'num', source: factSrc(c.bal.nci, 'Non-controlling interests, book value') ?? est('none tagged') },
       { id: 'pref', label: 'Preferred shares', unit: cur, value: v(c.bal.pref), fmt: 'num', source: factSrc(c.bal.pref, 'Preferred shares, book value') ?? est('none tagged') },
-      { id: 'shares', label: 'Shares outstanding', unit: 'm', value: c.shares.v, fmt: 'num', source: { title: `SEC ${c.shares.form}`, note: `as of ${c.shares.asOf}, ${c.shares.concept}`, url: c.shares.url } },
+      { id: 'shares', label: c.shares.adr ? 'Shares outstanding (ADS equivalent)' : 'Shares outstanding', unit: 'm', value: c.shares.v, fmt: 'num', source: { title: c.shares.form.startsWith('Nasdaq') ? c.shares.form : `SEC ${c.shares.form}`, note: `as of ${c.shares.asOf}, ${c.shares.concept}`, url: c.shares.url } },
       { id: 'price', label: `Share price (${c.price.symbol})`, unit: c.currency === 'CAD' ? 'C$' : 'US$', value: c.price.v, fmt: 'px', source: { title: `${c.price.exchange} close, Yahoo Finance`, date: c.price.date } },
     ]),
     ...g('Terminal value', [
