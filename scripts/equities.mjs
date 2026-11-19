@@ -123,7 +123,8 @@ function beta(a, b, index) {
 
 // Company facts: from the SEC bulk file when FACTS_ZIP points at companyfacts.zip (the daily job), else the API.
 async function factsOf(cik) {
-  if (process.env.FACTS_ZIP) return JSON.parse(execFileSync('unzip', ['-p', process.env.FACTS_ZIP, `CIK${cik}.json`], { maxBuffer: 1 << 30 }).toString());
+  // (a company new since the bulk file was built is not in it: fall back to the API)
+  if (process.env.FACTS_ZIP) try { return JSON.parse(execFileSync('unzip', ['-p', process.env.FACTS_ZIP, `CIK${cik}.json`], { maxBuffer: 1 << 30, stdio: ['ignore', 'pipe', 'ignore'] }).toString()); } catch { await sleep(150); }
   return get(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`);
 }
 // Industry (SIC code) from the SEC submissions file: SUBS_ZIP = path to submissions.zip, else the API. Used to pick peers.
@@ -159,7 +160,13 @@ async function build(ticker, cikOf) {
   if (!facts) throw new Error('no XBRL facts');
   // Banks and insurers: an unlevered DCF does not fit them.
   const BANK = { 'us-gaap': ['InterestExpenseDeposits', 'NoninterestIncome', 'PremiumsEarnedNet', 'PolicyholderBenefitsAndClaimsIncurredNet'], 'ifrs-full': ['DepositsFromBanks', 'InsuranceContractsThatAreLiabilities', 'LiabilitiesArisingFromInsuranceContracts'] };
-  if (Object.entries(BANK).some(([ns, list]) => list.some(c => facts[ns]?.[c]))) throw new Error('bank or insurer');
+  // SIC 60xx banks and 63xx insurers always excluded. A bank or insurer tag counts only if used in the last 3 years (Agilent last tagged deposit interest in 2017).
+  const recent = new Date(Date.now() - 3 * 365 * 864e5).toISOString().slice(0, 10);
+  const used = (ns, c) => Object.values(facts[ns]?.[c]?.units ?? {}).some(a => a.some(f => f.end >= recent));
+  const ind = await sicOf(cik);
+  // Tags alone mislead (a drug company tags its own bank deposits as DepositsFromBanks), so they count only for other finance codes or no code.
+  const finance = !ind.sic || /^6[1-7]/.test(ind.sic);
+  if (/^6[03]/.test(ind.sic ?? '') || (finance && Object.entries(BANK).some(([ns, list]) => list.some(c => used(ns, c))))) throw new Error('bank or insurer');
   // Reporting currency: the unit revenue is tagged in.
   // (the unit of the most recent full-year revenue fact: companies change reporting currency, e.g. Nebius from RUB to USD)
   let cur, curEnd = '';
@@ -210,15 +217,18 @@ async function build(ticker, cikOf) {
   if (!shares && dilLast) shares = { v: +(dilLast.val / 1e6).toFixed(3), asOf: lastEnd, concept: dilLast.concept + ' (diluted weighted average)', form: dilLast.form, url: link(co.cik_str, dilLast.accn) };
 
   // CAD reporters are priced on the TSX in CAD; everyone else on the US listing in USD (other currencies are translated, see priced()).
-  const sym = cur === 'CAD' ? `${TSX[ticker] ?? ticker.replace(/-/g, '.')}.TO` : ticker.replace(/\./g, '-');
+  const us = ticker.replace(/\./g, '-');
+  const sym = cur === 'CAD' ? `${TSX[ticker] ?? ticker.replace(/-/g, '.')}.TO` : us;
   const foreign = Object.values(hist.rev).some(f => f && /^(20-F|40-F|6-K)/.test(f.form));
-  return { sym, rec: { ticker, name: entityName, cik: co.cik_str, ...(await sicOf(cik)), currency: cur, foreign, fyEnds: ends, hist, bal, shares } };
+  return { sym, us, rec: { ticker, name: entityName, cik: co.cik_str, ...ind, currency: cur, foreign, fyEnds: ends, hist, bal, shares } };
 }
 
 // Step 2: price and beta from the spark data, in the reporting currency.
-function priced({ sym, rec: r0 }, px, rf, listing) {
-  const q = px[sym];
+function priced({ sym, us, rec: r0 }, px, rf, listing) {
+  // A CAD reporter with no TSX quote under that symbol (e.g. Cameco is CCO on the TSX) is priced on its US listing and translated.
+  const q = px[sym] ?? px[us];
   if (!q) throw new Error(`no price for ${sym}`);
+  if (q === px[us] && sym !== us) sym = us;
   let rec = r0;
   // Foreign reporting currency: translate every reported figure into the listing currency at the latest spot rate.
   if (q.meta.currency !== rec.currency) {
@@ -280,7 +290,9 @@ const alias = {}; // other share classes of a covered company -> the ticker it i
 if (all) {
   const seen = new Map(UNIVERSE.map(t => [cikOf[t]?.cik_str, t]));
   const more = [];
-  const syms = Object.keys(listing).length ? Object.entries(listing).filter(([, l]) => !NOT_COMMON.test(l.name)).sort((a, b) => b[1].mcap - a[1].mcap).map(([t]) => t)
+  // Several share classes of one company: cover the one SEC lists first (its primary ticker: CMCSA, not Comcast's exchangeable notes CCZ).
+  const rank = Object.fromEntries(Object.keys(cikOf).map((t, k) => [t, k]));
+  const syms = Object.keys(listing).length ? Object.entries(listing).filter(([, l]) => !NOT_COMMON.test(l.name)).map(([t]) => t).sort((a, b) => (rank[a] ?? 1e9) - (rank[b] ?? 1e9))
     : (await get('https://www.sec.gov/files/company_tickers_exchange.json')).data.filter(r => ['NYSE', 'Nasdaq'].includes(r[3])).map(r => r[2]);
   for (const t of syms) {
     const c = cikOf[t]?.cik_str;
@@ -298,7 +310,7 @@ for (const t of list) {
   try { built.push(await build(t, cikOf)); } catch (e) { skipped.push(t); why[t] = e.message; if (!all) console.log(`skip ${t}: ${e.message}`); }
   if (!process.env.FACTS_ZIP) await sleep(150); // stay under SEC's 10 requests a second
 }
-const px = await spark([...new Set([...built.map(b => b.sym), ...built.filter(b => !['USD', 'CAD'].includes(b.rec.currency)).map(b => `${b.rec.currency}USD=X`), '^GSPC', '^GSPTSE'])]);
+const px = await spark([...new Set([...built.flatMap(b => [b.sym, b.us]), ...built.filter(b => b.rec.currency !== 'USD').map(b => `${b.rec.currency}USD=X`), '^GSPC', '^GSPTSE'])]);
 const index = [];
 for (const b of built) {
   try {
