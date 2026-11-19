@@ -37,7 +37,7 @@ export const p3: Module = {
     cp: { value: 611.5, source: { ...IO, page: '14', note: 'substantial completion payment' } },
     cpi: { value: 0.02, source: BOC },
     tax_rate: { value: 0.265, source: CRA },
-    cca_rate: { value: 0.04, source: est('building class rate assumed; P3 tax treatment varies by structure') },
+    cca_rate: { value: 0.04, source: { title: 'Canada Revenue Agency, classes of depreciable property: Class 1 (4%); 6% only for a non-residential building elected into a separate class', date: 'page dated Aug 31, 2026', url: 'https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/sole-proprietorships-partnerships/report-business-income-expenses/claiming-capital-cost-allowance/classes-depreciable-property.html', est: true, note: 'Class 1 rate, the rate that applies without the separate class election. Whether Project Co elected (or claims CCA at all, since the hospital holds title) is not public. 4% is consistent with the calibration: at 6% the minimum DSCR would be 1.27x against the published 1.25x, and equity IRR 7.9% instead of 7.2%' } },
     rate: { value: 0.0508, source: est('blended rate of the long amortizing bond and long bullet bond (Plenary project page); coupons not published; ' + CAL + '. Cross-check: a Cbonds listing shows a 4.895% Humber bond due 2039', { title: 'Cbonds', url: 'https://cbonds.com/bonds/190989/' }) },
     other_costs: { value: 157.6, source: est('costs beyond the $974.8m construction contract that the public sources do not break out (inference: development, financing and transaction costs); ' + CAL, DBRS) },
     tenor: { value: 30, source: est('debt assumed to amortize over the 30-year service term') },

@@ -29,3 +29,4 @@ Calibration (2026-11-17): coupons, payment split and non-construction costs are 
 
 ## Tax
 Combined Ontario general corporate rate 26.5% (federal 15% + Ontario 11.5%). Found only in secondary sources (accounting firms) so far; confirm on a government page before use.
+Update 2026-11-19: 26.5% is confirmed on the CRA corporation tax rates page (cited in p3.ts). CCA: CRA "Classes of depreciable property" (page dated Aug 31, 2026) gives Class 1 at 4%; a non-residential building elected into a separate class gets 2% more (6%), manufacturing and processing 6% more (10%); without the election 4% applies. Project Co's election, and whether it claims building CCA at all (the hospital holds title), is not public. Kept at 4%: at 6% the calibrated model gives a minimum DSCR of 1.27x against the published 1.25x (equity IRR 7.9% vs 7.2%), so 4% is the rate consistent with the published sizing.
