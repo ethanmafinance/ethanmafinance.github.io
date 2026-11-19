@@ -70,3 +70,21 @@ test('Fortis example: guidance assumptions reproduce the filings and the capital
   for (const c of fortisChecks) if (!c.info) assert.ok(Math.abs(c.model(res) / c.published - 1) <= (c.tol ?? 0.01), c.label);
   assert.ok(res.scalar.ronic_used > res.scalar.wacc, 'new capital earns above WACC');
 });
+
+test('consensus: years 1 and 2 growth as estimated, then a straight fade; NTM forward figures', async () => {
+  const { forward } = await import('../src/engine/comps.ts');
+  const withCons: Company = { ...co, cons: { date: co.price.date, rows: [{ end: '2026-12-31', g: 0.1, nRev: 5, eps: 4, nEps: 5 }, { end: '2027-12-31', g: 0.06, nRev: 5, eps: 5, nEps: 5 }] } };
+  const d = dcf(withCons, { years: 5, scenario: 'base', wacc: 'capm', terminal: 'growth' }).def;
+  const { row } = new Model(d).results();
+  const g = row.growth.filter((_, k) => row.fc[k] === 1);
+  const gt = d.inputs.find(i => i.id === 'g_term')!.value;
+  close(g[0], 0.1); close(g[1], 0.06); close(g[4], gt);
+  close(g[2], 0.06 + (gt - 0.06) / 3); // straight line from year 2 to year 5
+  // bear case moves both consensus years by 3pt
+  const bear = dcf(withCons, { years: 5, scenario: 'downside', wacc: 'capm', terminal: 'growth' }).def.inputs;
+  close(bear.find(i => i.id === 'g2')!.value, 0.03);
+  // NTM: share f of year 1 has passed, so NTM = (1 - f) x year 1 + f x year 2
+  const f = forward(withCons, 1000, 10);
+  close(f.rev_f!, 1000 * 1.1 * (1 - f.f + f.f * 1.06)); close(f.ni_f!, ((1 - f.f) * 4 + f.f * 5) * 10);
+  assert.equal(forward(co, 1000, 10).rev_f, null);
+});

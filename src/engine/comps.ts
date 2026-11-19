@@ -44,7 +44,21 @@ export function impliedPerShare(c: Company, multiple: number) {
 }
 
 // Peers from the comps file (public/data/eq/comps.json, one row per covered company).
-export type Row = { ticker: string; sic: string; currency: string; mcap: number; ev: number; rev: number | null; ebitda: number | null; ni: number | null; fy: string; beta?: number | null };
+export type Row = { ticker: string; sic: string; currency: string; mcap: number; ev: number; rev: number | null; ebitda: number | null; ni: number | null; fy: string; beta?: number | null;
+  rev_f?: number | null; ni_f?: number | null };
+
+// Next twelve months (NTM) revenue and earnings from analyst consensus: fiscal years 1 and 2 weighted by the share of year 1
+// still to come at the price date, which puts companies with different year ends on one calendar. Null unless both years
+// have estimates. Revenue uses consensus growth on the filed revenue; earnings = mean EPS x shares.
+export function forward(c: Pick<Company, 'cons' | 'fyEnds' | 'price'>, lastRev: number, shares: number) {
+  const [y1, y2] = c.cons?.rows ?? [];
+  const f = Math.min(1, Math.max(0, (Date.parse(c.price.date) - Date.parse(c.fyEnds[c.fyEnds.length - 1])) / (365.25 * 864e5)));
+  return {
+    f,
+    rev_f: y1?.g !== undefined && y2?.g !== undefined && lastRev > 0 ? lastRev * (1 + y1.g) * (1 - f + f * (1 + y2.g)) : null,
+    ni_f: y1?.eps !== undefined && y2?.eps !== undefined ? ((1 - f) * y1.eps + f * y2.eps) * shares : null,
+  };
+}
 export const rowsOf = (j: { fields: string[]; rows: unknown[][] }): Row[] => j.rows.map(r => Object.fromEntries(j.fields.map((f, k) => [f, r[k]])) as Row);
 // Multiples with nonsense removed: negative denominators and values above 100x are not meaningful.
 const ok = (v: number) => (Number.isFinite(v) && v > 0 && v <= 100 ? v : undefined);
@@ -52,6 +66,8 @@ export const multiples = (r: Row) => ({
   evEbitda: r.ebitda && r.ebitda > 0 ? ok(r.ev / r.ebitda) : undefined,
   evRev: r.rev && r.rev > 0 ? ok(r.ev / r.rev) : undefined,
   pe: r.ni && r.ni > 0 ? ok(r.mcap / r.ni) : undefined,
+  peF: r.ni_f && r.ni_f > 0 ? ok(r.mcap / r.ni_f) : undefined,
+  evRevF: r.rev_f && r.rev_f > 0 ? ok(r.ev / r.rev_f) : undefined,
 });
 
 // The site's curated group if there is one; otherwise companies with the same SIC industry code (4, then 3, then 2 digits)

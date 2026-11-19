@@ -30,22 +30,25 @@ export function quantile(a: (number | undefined)[], p: number) {
 
 // Weights for the implied share price: how much each method counts, set by whether the DCF fits.
 // A method with no value (no peers, negative earnings, a negative result) drops out and the rest are scaled to 100%.
-export type Method = 'dcf_g' | 'dcf_x' | 'ev_ebitda' | 'pe' | 'ev_rev';
+export type Method = 'dcf_g' | 'dcf_x' | 'ev_ebitda' | 'pe' | 'ev_rev' | 'pe_f' | 'ev_rev_f';
 const W: Record<Fit['verdict'], Record<Method, number>> = {
-  ok: { dcf_g: 0.25, dcf_x: 0.25, ev_ebitda: 0.25, pe: 0.25, ev_rev: 0 },
-  caution: { dcf_g: 0.15, dcf_x: 0.15, ev_ebitda: 0.35, pe: 0.35, ev_rev: 0 },
-  no: { dcf_g: 0, dcf_x: 0, ev_ebitda: 1 / 3, pe: 1 / 3, ev_rev: 1 / 3 },
+  ok: { dcf_g: 0.25, dcf_x: 0.25, ev_ebitda: 0.25, pe: 0.25, ev_rev: 0, pe_f: 0, ev_rev_f: 0 },
+  caution: { dcf_g: 0.15, dcf_x: 0.15, ev_ebitda: 0.35, pe: 0.35, ev_rev: 0, pe_f: 0, ev_rev_f: 0 },
+  no: { dcf_g: 0, dcf_x: 0, ev_ebitda: 1 / 3, pe: 1 / 3, ev_rev: 1 / 3, pe_f: 0, ev_rev_f: 0 },
 };
 export const WHY: Record<Fit['verdict'], string> = {
-  ok: 'The DCF fits, so it carries half the weight (perpetuity growth and exit multiple equally) and peer EV / EBITDA and P / E the other half. EV / revenue is left out because it ignores margins.',
-  caution: 'The DCF is usable with care, so it carries 30% and peer EV / EBITDA and P / E 70%. EV / revenue is left out because it ignores margins.',
-  no: 'The DCF is not meaningful, so it carries no weight. The price rests on peer multiples, with EV / revenue included because earnings are negative or not yet representative.',
+  ok: 'The DCF fits, so it carries half the weight (perpetuity growth and exit multiple equally) and peer EV / EBITDA and P / E the other half (forward P / E when consensus is published). EV / revenue is left out because it ignores margins.',
+  caution: 'The DCF is usable with care, so it carries 30% and peer EV / EBITDA and P / E 70% (forward P / E when consensus is published). EV / revenue is left out because it ignores margins.',
+  no: 'The DCF is not meaningful, so it carries no weight. The price rests on peer multiples, with EV / revenue included because earnings are negative or not yet representative. Forward multiples replace trailing ones when consensus is published.',
 };
 export function blend(verdict: Fit['verdict'], values: Partial<Record<Method, number>>) {
   const ok = (m: Method) => { const v = values[m]; return v !== undefined && Number.isFinite(v) && v > 0; };
-  let w = Object.fromEntries((Object.keys(W.ok) as Method[]).map(m => [m, ok(m) ? W[verdict][m] : 0])) as Record<Method, number>;
+  // Forward multiples (consensus next twelve months) take the place of the trailing ones when they exist: the market prices on them.
+  const slot = { ...W[verdict] };
+  for (const [t, f] of [['pe', 'pe_f'], ['ev_rev', 'ev_rev_f']] as const) if (ok(f)) { slot[f] = slot[t]; slot[t] = 0; }
+  let w = Object.fromEntries((Object.keys(W.ok) as Method[]).map(m => [m, ok(m) ? slot[m] : 0])) as Record<Method, number>;
   // Profitable but every earnings-based method missing: fall back to revenue multiples.
-  if (!Object.values(w).some(x => x > 0) && ok('ev_rev')) w = { ...w, ev_rev: 1 };
+  if (!Object.values(w).some(x => x > 0) && (ok('ev_rev_f') || ok('ev_rev'))) w = { ...w, [ok('ev_rev_f') ? 'ev_rev_f' : 'ev_rev']: 1 };
   const sum = Object.values(w).reduce((s, x) => s + x, 0);
   if (!sum) return undefined;
   const weights = Object.fromEntries(Object.entries(w).map(([m, x]) => [m, x / sum])) as Record<Method, number>;

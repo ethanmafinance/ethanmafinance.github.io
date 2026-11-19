@@ -26,6 +26,9 @@ test('blend: weights follow the DCF fit and drop methods without a value', async
   const no = blend('no', { dcf_g: -5, ev_ebitda: undefined, pe: undefined, ev_rev: 30 })!;
   assert.equal(no.weights.ev_rev, 1);
   assert.equal(no.value, 30);
+  // forward P / E takes the trailing P / E weight when it has a value
+  const fw = blend('ok', { dcf_g: 100, dcf_x: 100, ev_ebitda: 100, pe: 40, pe_f: 200 })!;
+  assert.ok(fw.weights.pe === 0 && Math.abs(fw.weights.pe_f - 0.25) < 1e-9 && Math.abs(fw.value - 125) < 1e-9);
   const part = blend('ok', { dcf_g: 100, ev_ebitda: 50, pe: -1 })!;
   assert.ok(Math.abs(part.weights.dcf_g - 0.5) < 1e-9 && Math.abs(part.value - 75) < 1e-9);
   assert.equal(blend('ok', {}), undefined);

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Model, type ModelDef } from '../engine/sheet.ts';
 import { SCENARIO, shiftMargin, type Answers, type Company } from '../engine/dcf.ts';
 import { blend, dcfFit, quantile, WHY, type Method } from '../engine/fit.ts';
-import { multiples, pickPeers, rowsOf, type Row } from '../engine/comps.ts';
+import { forward, multiples, pickPeers, rowsOf, type Row } from '../engine/comps.ts';
 import { fmt } from './ModelPage.tsx';
 import { DATA } from './EquityPage.tsx';
 
@@ -30,18 +30,19 @@ export function ValuationSummary({ co, a, def, values, res, ccy, onCase, missing
   const ni = co.hist.ni.at(-1)?.v;
   const mcap = values.price * values.shares;
   const claims = values.debt - values.cash + values.nci + values.pref;
-  const self: Row = { ticker: co.ticker, sic: co.sic ?? '', currency: co.currency, mcap, ev: mcap + claims, rev: rev[H - 1], ebitda: ebit[H - 1] + da[H - 1], ni: ni ?? null, fy: co.fyEnds.at(-1)! };
+  const fwd = forward(co, rev[H - 1], values.shares);
+  const self: Row = { ticker: co.ticker, sic: co.sic ?? '', currency: co.currency, mcap, ev: mcap + claims, rev: rev[H - 1], ebitda: ebit[H - 1] + da[H - 1], ni: ni ?? null, fy: co.fyEnds.at(-1)!, rev_f: fwd.rev_f, ni_f: fwd.ni_f };
   const perShareFromEv = (ev: number) => (ev - claims) / values.shares;
 
   const peers = useMemo(() => (rows ? pickPeers(self, rows) : undefined), [rows, co.ticker, co.sic]); // eslint-disable-line react-hooks/exhaustive-deps
   const pm = (peers?.peers ?? []).map(multiples);
-  const q = (k: 'evEbitda' | 'evRev' | 'pe') => { const xs = pm.map(m => m[k]); const n = xs.filter(x => x !== undefined).length; return n >= 3 ? [quantile(xs, 0.25)!, quantile(xs, 0.5)!, quantile(xs, 0.75)!] as const : undefined; };
-  const qEbitda = q('evEbitda'), qRev = q('evRev'), qPe = q('pe');
+  const q = (k: 'evEbitda' | 'evRev' | 'pe' | 'peF' | 'evRevF') => { const xs = pm.map(m => m[k]); const n = xs.filter(x => x !== undefined).length; return n >= 3 ? [quantile(xs, 0.25)!, quantile(xs, 0.5)!, quantile(xs, 0.75)!] as const : undefined; };
+  const qEbitda = q('evEbitda'), qRev = q('evRev'), qPe = q('pe'), qPeF = q('peF'), qRevF = q('evRevF');
 
   const out = useMemo(() => {
     const m = new Model(def, values);
     const cur = SCENARIO[a.scenario];
-    const caseVals = (s: Case): V => { const c = SCENARIO[s]; return { ...values, g1: values.g1 + c[0] - cur[0], m_target: shiftMargin(values.m_target / (1 + (cur[1] - 1) * Math.sign(values.m_target)), c[1]), g_term: values.g_term + c[2] - cur[2] }; };
+    const caseVals = (s: Case): V => { const c = SCENARIO[s]; return { ...values, g1: values.g1 + c[0] - cur[0], g2: values.g2 + c[0] - cur[0], m_target: shiftMargin(values.m_target / (1 + (cur[1] - 1) * Math.sign(values.m_target)), c[1]), g_term: values.g_term + c[2] - cur[2] }; };
     const run = (v: V) => { m.set(v); return m.results(); };
     const perp = CASES.map(([s]) => run({ ...caseVals(s), tv_mode: 0 }).scalar.per_share);
     const exitM = qEbitda ?? ([0.8, 1, 1.2].map(f => values.exit_mult * f) as unknown as readonly [number, number, number]);
@@ -62,11 +63,16 @@ export function ValuationSummary({ co, a, def, values, res, ccy, onCase, missing
   const compBar = (key: Method, label: string, qs: readonly [number, number, number] | undefined, metric: number | null, toShare: (x: number) => number, what: string) => {
     if (!qs) return bars.push({ label, lo: NaN, mid: NaN, hi: NaN, basis: 'fewer than 3 peers with a meaningful multiple', off: 'no peers' });
     if (!(metric && metric > 0)) return bars.push({ label, lo: NaN, mid: NaN, hi: NaN, basis: `${co.ticker}'s ${what} is negative`, off: 'not meaningful' });
-    bars.push({ key, label, lo: toShare(qs[0] * metric), mid: toShare(qs[1] * metric), hi: toShare(qs[2] * metric), basis: `Peer 25th to 75th percentile ${fmt(qs[0], 'x')} to ${fmt(qs[2], 'x')}, median ${fmt(qs[1], 'x')}, on last-year ${what}` });
+    bars.push({ key, label, lo: toShare(qs[0] * metric), mid: toShare(qs[1] * metric), hi: toShare(qs[2] * metric), basis: `Peer 25th to 75th percentile ${fmt(qs[0], 'x')} to ${fmt(qs[2], 'x')}, median ${fmt(qs[1], 'x')}, on ${what}` });
   };
-  compBar('ev_ebitda', 'Comps, EV / EBITDA', qEbitda, self.ebitda, perShareFromEv, 'EBITDA');
-  compBar('ev_rev', 'Comps, EV / revenue', qRev, self.rev, perShareFromEv, 'revenue');
-  compBar('pe', 'Comps, P / E', qPe, self.ni, x => x / values.shares, 'net income');
+  // Forward multiples only when the company has consensus for both years (the peers' own count is checked in q).
+  const fwdBar = (key: Method, label: string, qs: typeof qPeF, metric: number | null | undefined, toShare: (x: number) => number, what: string) =>
+    metric == null ? bars.push({ label, lo: NaN, mid: NaN, hi: NaN, basis: `no analyst consensus for ${co.ticker}'s next two fiscal years`, off: 'no consensus' }) : compBar(key, label, qs, metric, toShare, what);
+  compBar('ev_ebitda', 'Comps, EV / EBITDA', qEbitda, self.ebitda, perShareFromEv, 'last-year EBITDA');
+  fwdBar('pe_f', 'Comps, forward P / E', qPeF, self.ni_f, x => x / values.shares, 'next twelve months consensus EPS x shares');
+  compBar('pe', 'Comps, P / E', qPe, self.ni, x => x / values.shares, 'last-year net income');
+  fwdBar('ev_rev_f', 'Comps, forward EV / revenue', qRevF, self.rev_f, perShareFromEv, 'next twelve months consensus revenue');
+  compBar('ev_rev', 'Comps, EV / revenue', qRev, self.rev, perShareFromEv, 'last-year revenue');
   if (co.price.lo52 && co.price.hi52) bars.push({ label: '52-week trading range', lo: co.price.lo52, mid: co.price.v, hi: co.price.hi52, basis: `52-week low and high, Yahoo Finance (${co.price.symbol}); mid line is the latest close` });
 
   // Implied share price: the methods weighted by how well each fits, for the bear, base and bull cases
@@ -116,7 +122,7 @@ export function ValuationSummary({ co, a, def, values, res, ccy, onCase, missing
         {mixBase && <tr className="total"><td>Implied share price (weighted)</td>{mixes.map((m, k) => <td key={k}>{m ? fmt(m.value, 'px') : 'n/m'}</td>)}<td>100%</td><td className="note" style={{ textAlign: 'left', whiteSpace: 'normal' }}>{WHY[out.fit.verdict]} The weight of a method with no value is spread over the rest.</td></tr>}
         </tbody>
       </table></div>
-      <p className="note">Current price {ccy}{fmt(values.price, 'px')}. Bear and bull move year 1 growth by 3pt, the target EBIT margin by 10% and terminal growth by 0.5pt from the case shown{onCase ? '; the toggle switches the case the whole page uses (edits reset)' : ''}. Multiples apply to the last reported year through the same bridge as the DCF (debt, cash, non-controlling interests, preferred).</p>
+      <p className="note">Current price {ccy}{fmt(values.price, 'px')}. Bear and bull move years 1 and 2 growth by 3pt, the target EBIT margin by 10% and terminal growth by 0.5pt from the case shown{onCase ? '; the toggle switches the case the whole page uses (edits reset)' : ''}. Trailing multiples apply to the last reported year and forward multiples to the next twelve months of analyst consensus, both through the same bridge as the DCF (debt, cash, non-controlling interests, preferred).{co.cons?.date ? ` Consensus: Yahoo Finance analyst estimates, ${co.cons.date}.` : ''}</p>
       {peers && <PeersTable peers={peers.peers} basis={peers.basis} self={self} />}
     </div>
     </>
@@ -170,19 +176,19 @@ function PeersTable({ peers, basis, self }: { peers: Row[]; basis: string; self:
   if (!peers.length) return <p className="note">No peer group: {basis || 'no companies share its industry code'}.</p>;
   const x = (n?: number) => (n === undefined ? 'n/m' : fmt(n, 'x'));
   const ms = peers.map(multiples), me = multiples(self);
-  const stat = (p: number) => ({ evEbitda: quantile(ms.map(m => m.evEbitda), p), evRev: quantile(ms.map(m => m.evRev), p), pe: quantile(ms.map(m => m.pe), p) });
+  const stat = (p: number) => ({ evEbitda: quantile(ms.map(m => m.evEbitda), p), evRev: quantile(ms.map(m => m.evRev), p), pe: quantile(ms.map(m => m.pe), p), evRevF: quantile(ms.map(m => m.evRevF), p), peF: quantile(ms.map(m => m.peF), p) });
   return (
     <>
       <h2 style={{ marginTop: 16 }}>Trading comparables</h2>
-      <p className="note">Peers: {basis}. Multiples on each company's last reported fiscal year and latest close; n/m where earnings are negative or the multiple is above 100x.</p>
+      <p className="note">Peers: {basis}. Trailing multiples on each company's last reported fiscal year, forward (fwd) on the next twelve months of analyst consensus (Yahoo Finance; EPS on the analysts' basis, usually before one-off items), all at the latest close; n/m where earnings are negative, the multiple is above 100x, or fewer than 3 analysts publish estimates.</p>
       <div className="scroll-x"><table>
-        <thead><tr><th>Company</th><th>Market cap (m)</th><th>EV (m)</th><th>EV / EBITDA</th><th>EV / revenue</th><th>P / E</th><th>Fiscal year</th></tr></thead>
+        <thead><tr><th>Company</th><th>Market cap (m)</th><th>EV (m)</th><th>EV / EBITDA</th><th>EV / revenue</th><th>EV / revenue fwd</th><th>P / E</th><th>P / E fwd</th><th>Fiscal year</th></tr></thead>
         <tbody>
-          <tr style={{ fontWeight: 700 }}><td>{self.ticker}</td><td>{self.currency === 'CAD' ? 'C$' : 'US$'}{fmt(self.mcap)}</td><td>{fmt(self.ev)}</td><td>{x(me.evEbitda)}</td><td>{x(me.evRev)}</td><td>{x(me.pe)}</td><td>{self.fy}</td></tr>
+          <tr style={{ fontWeight: 700 }}><td>{self.ticker}</td><td>{self.currency === 'CAD' ? 'C$' : 'US$'}{fmt(self.mcap)}</td><td>{fmt(self.ev)}</td><td>{x(me.evEbitda)}</td><td>{x(me.evRev)}</td><td>{x(me.evRevF)}</td><td>{x(me.pe)}</td><td>{x(me.peF)}</td><td>{self.fy}</td></tr>
           {peers.map((p, k) => (
-            <tr key={p.ticker}><td><a href={`#/equity/${p.ticker}`}>{p.ticker}</a></td><td>{p.currency === 'CAD' ? 'C$' : 'US$'}{fmt(p.mcap)}</td><td>{fmt(p.ev)}</td><td>{x(ms[k].evEbitda)}</td><td>{x(ms[k].evRev)}</td><td>{x(ms[k].pe)}</td><td>{p.fy}</td></tr>
+            <tr key={p.ticker}><td><a href={`#/equity/${p.ticker}`}>{p.ticker}</a></td><td>{p.currency === 'CAD' ? 'C$' : 'US$'}{fmt(p.mcap)}</td><td>{fmt(p.ev)}</td><td>{x(ms[k].evEbitda)}</td><td>{x(ms[k].evRev)}</td><td>{x(ms[k].evRevF)}</td><td>{x(ms[k].pe)}</td><td>{x(ms[k].peF)}</td><td>{p.fy}</td></tr>
           ))}
-          {([['25th percentile', 0.25], ['Median', 0.5], ['75th percentile', 0.75]] as const).map(([l, p]) => { const s = stat(p); return <tr key={l} className={p === 0.5 ? 'total' : ''}><td>Peer {l.toLowerCase()}</td><td></td><td></td><td>{x(s.evEbitda)}</td><td>{x(s.evRev)}</td><td>{x(s.pe)}</td><td></td></tr>; })}
+          {([['25th percentile', 0.25], ['Median', 0.5], ['75th percentile', 0.75]] as const).map(([l, p]) => { const s = stat(p); return <tr key={l} className={p === 0.5 ? 'total' : ''}><td>Peer {l.toLowerCase()}</td><td></td><td></td><td>{x(s.evEbitda)}</td><td>{x(s.evRev)}</td><td>{x(s.evRevF)}</td><td>{x(s.pe)}</td><td>{x(s.peF)}</td><td></td></tr>; })}
         </tbody>
       </table></div>
     </>

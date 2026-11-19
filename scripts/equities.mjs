@@ -9,7 +9,7 @@
 // --all covers every US-listed common stock (Nasdaq screener), writes coverage.json with the reason for each one left out.
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { pickPeers, rowsOf } from '../src/engine/comps.ts';
+import { forward, pickPeers, rowsOf } from '../src/engine/comps.ts';
 
 // SEC asks automated clients for a name and contact email in the User-Agent; set SEC_UA to your own.
 const UA = process.env.SEC_UA || 'infrastructure-investment-modeling-platform contact@example.com';
@@ -107,6 +107,70 @@ async function spark(symbols) {
     await sleep(400);
   }
   return out;
+}
+
+// Analyst consensus: Yahoo Finance earningsTrend (mean revenue and EPS estimates for the current and next fiscal year, with
+// analyst counts). quoteSummary needs a session cookie and crumb. Symbols that fail keep the last good copy in consensus.json,
+// so a blocked or failed run never drops consensus the site already had.
+const BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+async function consensus(symbols) {
+  let old = {};
+  try { old = JSON.parse(await readFile(new URL('consensus.json', OUT), 'utf8')).bySymbol; } catch {}
+  const out = {};
+  let failed = 0;
+  try {
+    const c = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': BROWSER }, redirect: 'manual' });
+    const cookie = c.headers.getSetCookie().map(s => s.split(';')[0]).join('; ');
+    const crumb = await (await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', { headers: { 'User-Agent': BROWSER, Cookie: cookie } })).text();
+    if (!cookie || !crumb || crumb.length > 20) throw new Error('no Yahoo session');
+    const one = async s => {
+      for (let i = 1; i <= 3; i++) {
+        const res = await fetch(`https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(s)}?modules=earningsTrend&crumb=${encodeURIComponent(crumb)}`, { headers: { 'User-Agent': BROWSER, Cookie: cookie }, signal: AbortSignal.timeout(20000) }).catch(() => null);
+        if (res?.status === 404) return { date: today, rows: [] }; // Yahoo has no such symbol: no consensus
+        if (res?.ok) {
+          const tr = (await res.json()).quoteSummary?.result?.[0]?.earningsTrend?.trend ?? [];
+          const raw = o => o?.raw ?? null;
+          return { date: today, rows: tr.filter(x => ['0y', '+1y'].includes(x.period)).map(x => ({ end: x.endDate,
+            rev: raw(x.revenueEstimate?.avg), revAgo: raw(x.revenueEstimate?.yearAgoRevenue), nRev: raw(x.revenueEstimate?.numberOfAnalysts), revCur: x.revenueEstimate?.revenueCurrency ?? null,
+            eps: raw(x.earningsEstimate?.avg), nEps: raw(x.earningsEstimate?.numberOfAnalysts), epsCur: x.earningsEstimate?.earningsCurrency ?? null })) };
+        }
+        await sleep(1500 * i);
+      }
+      throw new Error('failed');
+    };
+    // 4 requests at a time, about 3,600 symbols in a few minutes
+    const queue = [...symbols];
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      for (let s; (s = queue.shift()); ) {
+        try { out[s] = await one(s); } catch { failed++; if (old[s]) out[s] = old[s]; }
+        await sleep(100);
+      }
+    }));
+  } catch (e) { console.log(`consensus download failed (${e.message}); using the saved copy`); return old; }
+  console.log(`consensus: ${Object.values(out).filter(x => x.rows.length).length} of ${symbols.length} symbols, ${failed} failed`);
+  return { ...old, ...out };
+}
+const today = new Date().toISOString().slice(0, 10);
+
+// Consensus for the DCF and forward multiples, on the record's own basis. Revenue: Yahoo's growth rates (estimate over
+// Yahoo's own prior-year figure), used only when Yahoo's prior year matches the filed revenue within 10%, so the growth
+// applies to the same revenue line. Each needs at least 3 analysts. EPS: only when it is in the price currency and per listed share (no ADS ratio, no translation).
+function consOf(rec, c, r0) {
+  if (!c?.rows?.length) return undefined;
+  const lastEnd = r0.fyEnds.at(-1);
+  const near = (a, b) => Math.abs(days(a, b)) <= 45;
+  const yr = k => c.rows.find(x => x.end && near(x.end, new Date(Date.parse(lastEnd) + k * 365.25 * 864e5).toISOString().slice(0, 10)));
+  const y1 = yr(1), y2 = yr(2);
+  if (!y1) return { date: c.date, note: `consensus years (${c.rows.map(x => x.end).join(', ')}) do not follow the last filed year ${lastEnd}` };
+  const lastRev = r0.hist.rev.at(-1)?.v;
+  const okRev = y1.rev > 0 && y1.revAgo > 0 && y1.revCur === r0.currency && lastRev > 0 && Math.abs(y1.revAgo / 1e6 / lastRev - 1) <= 0.1;
+  const okEps = !rec.fx && !(rec.shares.adr && rec.shares.adr !== 1) && y1.epsCur === rec.currency;
+  const row = (y, prev) => ({ end: y.end,
+    ...(okRev && y.rev > 0 && prev > 0 && y.nRev >= 3 ? { g: +(y.rev / prev - 1).toFixed(5), nRev: y.nRev } : {}),
+    ...(okEps && y.eps != null && y.nEps >= 3 ? { eps: +y.eps.toFixed(4), nEps: y.nEps } : {}) });
+  return { date: c.date, source: 'Yahoo Finance analyst estimates (earningsTrend), mean of analysts', url: `https://finance.yahoo.com/quote/${encodeURIComponent(rec.price.symbol)}/analysis/`,
+    ...(okRev ? {} : { revNote: y1.revCur !== r0.currency ? `consensus revenue is in ${y1.revCur}, filings in ${r0.currency}` : `consensus prior-year revenue ${(y1.revAgo / 1e6).toFixed(0)} does not match the filed ${lastRev?.toFixed(0)} within 10% (a different revenue line)` }),
+    rows: [row(y1, y1.revAgo), ...(y2 ? [row(y2, y1.rev)] : [])] };
 }
 
 // Beta: slope of 60 monthly price returns on the stock against the local index (S&P 500 or S&P/TSX Composite).
@@ -233,7 +297,7 @@ async function build(ticker, cikOf) {
 }
 
 // Step 2: price and beta from the spark data, in the reporting currency.
-function priced({ sym, us, rec: r0 }, px, rf, listing) {
+function priced({ sym, us, rec: r0 }, px, rf, listing, cons = {}) {
   // A CAD reporter with no TSX quote under that symbol (e.g. Cameco is CCO on the TSX) is priced on its US listing and translated.
   const q = px[sym] ?? px[us];
   if (!q) throw new Error(`no price for ${sym}`);
@@ -271,7 +335,9 @@ function priced({ sym, us, rec: r0 }, px, rf, listing) {
   }
   const index = rec.currency === 'CAD' ? '^GSPTSE' : '^GSPC';
   const price = { v: +q.meta.regularMarketPrice.toFixed(4), date: new Date(q.meta.regularMarketTime * 1000).toISOString().slice(0, 10), symbol: sym, exchange: q.meta.fullExchangeName, hi52: q.meta.fiftyTwoWeekHigh, lo52: q.meta.fiftyTwoWeekLow };
-  return { ...rec, price, beta: beta(q, px[index], index), rf: rf[rec.currency], generated: new Date().toISOString().slice(0, 10) };
+  const out = { ...rec, price, beta: beta(q, px[index], index), rf: rf[rec.currency], generated: new Date().toISOString().slice(0, 10) };
+  const k = consOf(out, cons[sym], r0);
+  return k ? { ...out, cons: k } : out;
 }
 
 const args = process.argv.slice(2);
@@ -320,10 +386,12 @@ for (const t of list) {
   if (!process.env.FACTS_ZIP) await sleep(150); // stay under SEC's 10 requests a second
 }
 const px = await spark([...new Set([...built.flatMap(b => [b.sym, b.us]), ...built.filter(b => b.rec.currency !== 'USD').map(b => `${b.rec.currency}USD=X`), '^GSPC', '^GSPTSE'])]);
+const cons = await consensus([...new Set(built.map(b => (px[b.sym] ? b.sym : b.us)))]);
+await writeFile(new URL('consensus.json', OUT), JSON.stringify({ source: 'Yahoo Finance earningsTrend', bySymbol: cons }));
 const index = [];
 for (const b of built) {
   try {
-    const d = priced(b, px, rf, listing);
+    const d = priced(b, px, rf, listing, cons);
     await writeFile(new URL(`${d.ticker}.json`, OUT), JSON.stringify(d));
     index.push({ ticker: d.ticker, name: d.name, currency: d.currency, ...(UNIVERSE.includes(d.ticker) ? { f: 1 } : {}) });
     if (!all) console.log(`ok   ${d.ticker} ${d.currency} ${d.fyEnds.at(-1)} price ${d.price.v} beta ${d.beta.value}`);
@@ -357,9 +425,11 @@ for (const t of merged.map(i => i.ticker)) {
   const mcap = d.price.v * d.shares.v, ev = mcap + debtV(d.bal) - (d.bal.cash?.v ?? 0) + (d.bal.nci?.v ?? 0) + (d.bal.pref?.v ?? 0);
   const ebit = lastV(d.hist.ebit), da = lastV(d.hist.da);
   const r = n => (n == null || !Number.isFinite(n) ? null : +n.toFixed(1));
-  compRows.push([t, d.sic ?? '', d.currency, r(mcap), r(ev), r(lastV(d.hist.rev)), ebit == null || da == null ? null : r(ebit + da), r(lastV(d.hist.ni)), d.fyEnds.at(-1), d.beta.months >= 24 ? d.beta.value : null]);
+  // Next twelve months from consensus (comps.ts forward()).
+  const { rev_f: revF, ni_f: niF } = forward(d, lastV(d.hist.rev), d.shares.v);
+  compRows.push([t, d.sic ?? '', d.currency, r(mcap), r(ev), r(lastV(d.hist.rev)), ebit == null || da == null ? null : r(ebit + da), r(lastV(d.hist.ni)), d.fyEnds.at(-1), d.beta.months >= 24 ? d.beta.value : null, r(revF), r(niF)]);
 }
-const compsFile = { fields: ['ticker', 'sic', 'currency', 'mcap', 'ev', 'rev', 'ebitda', 'ni', 'fy', 'beta'], rows: compRows };
+const compsFile = { fields: ['ticker', 'sic', 'currency', 'mcap', 'ev', 'rev', 'ebitda', 'ni', 'fy', 'beta', 'rev_f', 'ni_f'], rows: compRows };
 await writeFile(new URL('comps.json', OUT), JSON.stringify(compsFile));
 // Bottom-up beta (Damodaran): unlever each peer's regression beta at its own net debt / equity, take the median, relever at the
 // company's net debt / equity. One company's 5-year regression is noisy (a crash or a squeeze can double it); a peer median is not.

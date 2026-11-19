@@ -19,6 +19,9 @@ export type Company = {
   beta: { value: number; months: number; index: string; from: string; to: string; basis?: string; se?: number;
     bottomUp?: { value: number; unlevered: number; n: number; de: number; tax: number; peers: string } };
   fx?: { from: string; rate: number; date: string; symbol: string };
+  // Analyst consensus for forecast years 1 and 2 (data script): g = revenue growth, eps = mean EPS in the price currency.
+  cons?: { date: string; source?: string; url?: string; note?: string; revNote?: string;
+    rows?: { end: string; g?: number; nRev?: number; eps?: number; nEps?: number }[] };
   rf: { value: number; date: string; title: string; url: string };
   generated: string;
 };
@@ -90,7 +93,13 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
   const tax = useEff ? effTax : STATUTORY[c.currency];
   const cagr = (r[H - 1] / r[0]) ** (1 / (H - 1)) - 1;
   const [dg, mm, dgt] = SCENARIO[a.scenario];
-  const g1 = clamp(cagr, -0.05, 0.25) + dg;
+  const gHist = clamp(cagr, -0.05, 0.25) + dg;
+  // Years 1 and 2 from analyst consensus when there are estimates for them (Yahoo's growth on its own prior-year revenue).
+  const [c1, c2] = c.cons?.rows ?? [];
+  const consG1 = c1?.g !== undefined, consG2 = consG1 && c2?.g !== undefined;
+  const g1 = consG1 ? c1.g! + dg : gHist;
+  const consSrc = (k: { end: string; g?: number; nRev?: number }, prev: string): Source => ({ title: c.cons!.source ?? 'Yahoo Finance analyst estimates', date: c.cons!.date, url: c.cons!.url,
+    est: !!dg, note: `consensus revenue estimate for the year to ${k.end}, mean of ${k.nRev} analysts, ${pct(k.g!)} above ${prev}${dg ? `; ${dg > 0 ? '+' : ''}${dg * 100}pt for the ${a.scenario} case` : ''}` });
   const margins = e.map((m, k) => m / r[k]);
   const nopat = e.map(m => m * (1 - tax));
   const capexOk = capex.every(Boolean);
@@ -140,7 +149,12 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
     ]),
     ...g('Forecast', [
       { id: 'g1', label: 'Revenue growth, forecast year 1', unit: '%', value: +g1.toFixed(4), fmt: 'pct',
-        source: est(`FY${fy[0]} to FY${fy[H - 1]} revenue CAGR of ${pct(cagr)}${dg ? `, ${dg > 0 ? '+' : ''}${dg * 100}pt for the ${a.scenario} case` : ''}. No analyst consensus is used`) },
+        source: consG1 ? consSrc(c1, `FY${fy[H - 1]} reported revenue`)
+          : est(`FY${fy[0]} to FY${fy[H - 1]} revenue CAGR of ${pct(cagr)}, held between -5% and 25%${dg ? `, ${dg > 0 ? '+' : ''}${dg * 100}pt for the ${a.scenario} case` : ''}. No analyst consensus used: ${c.cons?.revNote ?? c.cons?.note ?? (c.cons ? 'fewer than 3 analysts' : 'no estimates published')}`) },
+      { id: 'cons', label: 'Year 2 growth from consensus (1 = yes, then fade; 0 = fade straight from year 1)', unit: 'flag', value: consG2 ? 1 : 0, fmt: 'flag', min: 0, max: 1, step: 1,
+        source: est(consG2 ? 'consensus covers forecast years 1 and 2' : 'no year 2 consensus, so growth fades straight from year 1') },
+      { id: 'g2', label: 'Revenue growth, forecast year 2 (used when the line above is 1)', unit: '%', value: +(consG2 ? c2.g! + dg : g1).toFixed(4), fmt: 'pct',
+        source: consG2 ? consSrc(c2, 'the year 1 estimate') : est('not used') },
       { id: 'g_term', label: 'Terminal growth (revenue growth fades to this by the last forecast year)', unit: '%', value: +(G_TERM + dgt).toFixed(4), fmt: 'pct',
         source: est(`${G_TERM * 100}%: below long-run nominal GDP growth of about 4% (2.0% real plus 2.0% inflation), since no company outgrows the economy forever, and below the 10-year yield, the usual cap (Damodaran)${dgt ? `; ${dgt > 0 ? '+' : ''}${dgt * 100}pt for the ${a.scenario} case` : ''}`, FOMC) },
       { id: 'm1', label: 'EBIT margin, forecast year 1', unit: '%', value: +margins[H - 1].toFixed(4), fmt: 'pct',
@@ -236,7 +250,9 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
     row('fc', 'Forecast flag', 'flag', 'flag', x => `IF(${x.r('t')}>0,1,0)`),
 
     { section: 'Operating forecast' },
-    row('growth', 'Revenue growth', '%', 'pct', x => (x.k < H_ ? (x.first ? '""' : `${x.r('rev')}/${x.p('rev')}-1`) : fade(x, 'g1', x.i('g_term')))),
+    // With consensus for year 2: year 1 and year 2 as estimated, then a straight line from year 2 to terminal growth.
+    row('growth', 'Revenue growth', '%', 'pct', x => (x.k < H_ ? (x.first ? '""' : `${x.r('rev')}/${x.p('rev')}-1`)
+      : `IF(AND(${x.i('cons')}=1,${x.r('t')}>=2),${x.i('g2')}+(${x.i('g_term')}-${x.i('g2')})*MAX(0,${x.r('t')}-MAX(2,${x.i('hold')}))/MAX(1,${x.i('years')}-MAX(2,${x.i('hold')})),${fade(x, 'g1', x.i('g_term'))})`)),
     row('rev', 'Revenue', cur, 'num', x => (x.k < H_ ? hv(x, 'rev') : `${x.p('rev')}*(1+${x.r('growth')})`), { bold: true }),
     row('margin', 'EBIT margin', '%', 'pct', x => (x.k < H_ ? `${x.r('ebit')}/${x.r('rev')}` : fade(x, 'm1', x.i('m_target')))),
     row('ebit', hasAm ? 'EBITA: EBIT before amortization of acquired intangibles' : 'EBIT', cur, 'num', x => (x.k < H_ ? hv(x, 'ebit') + (hasAm ? '+' + hv(x, 'amort') : '') : `${x.r('rev')}*${x.r('margin')}`)),
@@ -264,7 +280,7 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       columns: vv => H_ + vv.years,
       dash: {
         units: `${c.currency} millions except per share; FY = reported, E = forecast`,
-        inputs: ['years', 'g1', 'g_term', 'm1', 'm_target', 'tax', 'reinv1', 'roic', 'ronic_keep', 'rf', 'beta', 'erp', 'kd', 'wacc_in', 'exit_mult', 'shares', 'price'],
+        inputs: ['years', 'g1', 'g2', 'g_term', 'm1', 'm_target', 'tax', 'reinv1', 'roic', 'ronic_keep', 'rf', 'beta', 'erp', 'kd', 'wacc_in', 'exit_mult', 'shares', 'price'],
         outputs: ['per_share', 'upside', 'ev', 'eq', 'mkt_ev', 'ke', 'wacc', 'tv_share', 'ev_ebitda'],
         rows: ['rev', 'growth', 'ebitda', 'ebit', 'margin', 'nopat', 'capex', 'fcf'],
       },

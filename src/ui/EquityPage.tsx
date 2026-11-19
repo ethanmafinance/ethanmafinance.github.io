@@ -66,7 +66,7 @@ function TickerBar({ a, current }: { a: Answers; current?: string }) {
 
 const QUESTIONS: { key: keyof Answers; q: string; options: [string, string, string][] }[] = [
   { key: 'years', q: 'How many years should the explicit forecast run?', options: [['5', '5 years', 'Mature company: growth settles quickly'], ['10', '10 years', 'Still growing: a longer fade to the terminal rate']] },
-  { key: 'scenario', q: 'Which case?', options: [['base', 'Base', 'Growth and margins from reported history'], ['downside', 'Bear', 'Year 1 growth -3pt, target margin x0.9, terminal growth -0.5pt'], ['upside', 'Bull', 'Year 1 growth +3pt, target margin x1.1, terminal growth +0.5pt']] },
+  { key: 'scenario', q: 'Which case?', options: [['base', 'Base', 'Growth from analyst consensus where published, margins from reported history'], ['downside', 'Bear', 'Years 1 and 2 growth -3pt, target margin x0.9, terminal growth -0.5pt'], ['upside', 'Bull', 'Years 1 and 2 growth +3pt, target margin x1.1, terminal growth +0.5pt']] },
   { key: 'wacc', q: 'How should the discount rate be set?', options: [['capm', 'Build it (CAPM)', 'Risk-free rate, beta and equity risk premium, weighted with debt'], ['direct', 'I will enter a WACC', 'Starts at 8%; change it in the assumptions']] },
   { key: 'terminal', q: 'How should the terminal value be set?', options: [['growth', 'Perpetuity growth', 'Value driver formula: growth, return on new capital, WACC'], ['multiple', 'Exit multiple', "EV / EBITDA, starting at today's trading multiple"]] },
 ];
@@ -192,7 +192,7 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
     // Reverse DCF: year 1 growth that makes value per share equal the current price (bisection; value rises with growth
     // unless new capital earns less than WACC).
     let lo = -0.3, hi = 0.6, implied: number | undefined;
-    const f = (g: number) => val({ g1: g }).per_share - deferred.price;
+    const f = (g: number) => val({ g1: g, cons: 0 }).per_share - deferred.price; // one growth rate fading straight to terminal
     const flo = f(lo), fhi = f(hi);
     if (Math.sign(flo) !== Math.sign(fhi)) {
       for (let k = 0; k < 40; k++) { const mid = (lo + hi) / 2; if (Math.sign(f(mid)) === Math.sign(flo)) lo = mid; else hi = mid; }
