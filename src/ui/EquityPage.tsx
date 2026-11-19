@@ -27,6 +27,7 @@ const plain = (why: string) =>
   why === 'bank or insurer' ? 'it is a bank or insurer. Lenders and insurers are valued on equity, book value and earnings, not an unlevered DCF, so the site does not model them.'
   : /^(no revenue|revenue tagged)/.test(why) ? 'its SEC filings report no revenue (usually a fund, a SPAC or a pre-revenue company), so there is nothing to forecast.'
   : why.startsWith('latest annual XBRL data is for') ? `its newest annual results are not yet in the SEC's structured (XBRL) data; the latest there is for ${why.slice(31)}, too old to value on.`
+  : /^404 |^no XBRL facts/.test(why) ? 'the SEC holds no structured (XBRL) financial data for it, which is usual for closed-end funds and trusts.'
   : why.startsWith('fewer than 2 years') ? 'the SEC data has fewer than 2 years of annual results (usually a recent listing).'
   : why.startsWith('share count does not reconcile') ? `the share count in its filings does not reconcile with the US listing ${why.slice(why.indexOf('('))}, so a per-share value could be wrong.`
   : why;
