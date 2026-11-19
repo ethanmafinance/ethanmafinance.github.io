@@ -1,3 +1,4 @@
+import { SaveButton } from './Saved.tsx';
 import { MemoCard, pfMemo } from './Memo.tsx';
 import { CasesPanel, type Metric } from './Cases.tsx';
 import { useDeferredValue, useMemo, useState } from 'react';
@@ -53,9 +54,9 @@ const OPERATING: [string, string, number, 'rel' | 'abs'][] = [
   ['st_cpi', 'Inflation', 0.01, 'abs'],
 ];
 
-export function ModelPage({ mod }: { mod: Module }) {
+export function ModelPage({ mod, start, user }: { mod: Module; start?: Record<string, number>; user?: boolean }) {
   const def = useMemo(() => projectFinance(mod), [mod]);
-  const defaults = useMemo(() => Object.fromEntries(def.inputs.map(i => [i.id, i.value])), [def]);
+  const defaults = useMemo(() => start ?? Object.fromEntries(def.inputs.map(i => [i.id, i.value])), [def, start]);
   const [values, setValues] = useState<Record<string, number>>(defaults);
   const model = useMemo(() => new Model(def, defaults), [def, defaults]);
   const res = useMemo(() => { model.set(values); return model.results(); }, [model, values]);
@@ -102,7 +103,7 @@ export function ModelPage({ mod }: { mod: Module }) {
             <h1 style={{ fontSize: 22, margin: 0 }}>{mod.name}</h1>
             <div className="note">{mod.blurb} C$ millions, nominal, annual periods.</div>
           </div>
-          <button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button>
+          <span className="head-actions"><SaveButton item={{ kind: 'infra', mod: mod.id, name: user ? `${mod.name} (my build)` : mod.name, values, headline: mod.noEntry ? `Equity value at 8% C$${fmt(equityValue(res, 0.08))}m` : `Equity IRR ${fmt(res.scalar.equity_irr, 'pct')}` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
         </div>
 
         <div className="kpis">

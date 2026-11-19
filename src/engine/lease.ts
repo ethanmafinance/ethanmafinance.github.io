@@ -97,5 +97,11 @@ export function lease(mod: Module): ModelDef {
     inputs: [...leaseInputs.map(i => ({ ...i, ...mod.defaults?.[i.id] })), ...mod.inputs],
     items: items.map(it => ('kind' in it ? { ...it, f: (x: any) => eq(it.f(x)) } : it)) as Item[],
     columns: v => v.hold + 2,
+    dash: {
+      units: 'US$ millions, nominal, annual periods',
+      inputs: ['start_year', 'hold', 'mw', 'occ', 'ntm', 'margin', 'esc', 'renew', 'rate', 'cap', 'price'],
+      outputs: ['value', 'pv_noi', 'pv_exit', 'tv_share', 'going_in', 'per_mw', 'rent_mw', 'irr'],
+      rows: ['rent', 'noi', 'cf'],
+    },
   };
 }

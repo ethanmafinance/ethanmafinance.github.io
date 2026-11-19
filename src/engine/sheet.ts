@@ -26,7 +26,9 @@ export type Row = { id: string; label: string; unit?: string; fmt?: Fmt; f: (x: 
 export type Scalar = { id: string; label: string; unit?: string; fmt?: Fmt; f: (x: Cx) => string; bold?: boolean };
 export type Item = { section: string } | ({ kind: 'row' } & Row) | ({ kind: 'scalar' } & Scalar);
 
-export type ModelDef = { title: string; inputs: Input[]; items: Item[]; columns: (v: Record<string, number>) => number };
+// dash: what the Excel Dashboard tab shows. Input ids, scalar ids and row ids; ids a module lacks are skipped.
+export type Dash = { inputs: string[]; outputs: string[]; rows: string[]; units: string };
+export type ModelDef = { title: string; inputs: Input[]; items: Item[]; columns: (v: Record<string, number>) => number; dash?: Dash };
 
 export const FIRST_YEAR_COL = 3; // column D
 export const INPUT_HEADER_ROWS = 2;

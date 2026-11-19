@@ -128,6 +128,12 @@ export function regulated(mod: Module): ModelDef {
     inputs: [...regulatedInputs.map(i => ({ ...i, ...mod.defaults?.[i.id] })), ...mod.inputs],
     items: items.map(it => ('kind' in it ? { ...it, f: (x: any) => eq(it.f(x)) } : it)) as Item[],
     columns: v => v.years + 1,
+    dash: {
+      units: 'C$ millions, nominal, annual periods',
+      inputs: ['start_year', 'years', 'nfa_open', 'isa_growth', 'eq_share', 'roe', 'ltd_rate', 'om_1', 'stretch', 'target_irr', 'entry_mult', 'exit_mult'],
+      outputs: ['rb0', 'rb_plan_end', 'rb_cagr', 'avg_roe', 'eq_value', 'ev_value', 'ev_rb', 'pe', 'entry_eq', 'equity_irr'],
+      rows: ['rb', 'srr', 'ni', 'earned_roe', 'fcfe', 'inv_cf'],
+    },
   };
 }
 

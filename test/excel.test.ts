@@ -18,7 +18,8 @@ for (const mod of [p3, renewables, tollRoad, utility, digital]) test(`${mod.id}:
   await wb.xlsx.load(await toXlsx(m));
   const sheets: Record<string, unknown[][]> = {};
   let formulas = 0;
-  for (const name of ['Inputs', 'Model']) {
+  assert.deepEqual(wb.worksheets.map(w => w.name), ['Dashboard', 'Inputs', 'Model']);
+  for (const name of ['Dashboard', 'Inputs', 'Model']) {
     const grid: unknown[][] = [];
     wb.getWorksheet(name)!.eachRow({ includeEmpty: true }, (row, r) => {
       row.eachCell({ includeEmpty: true }, (cell, c) => {
@@ -26,7 +27,7 @@ for (const mod of [p3, renewables, tollRoad, utility, digital]) test(`${mod.id}:
         (grid[r - 1] ??= [])[c - 1] = v && typeof v === 'object' && 'formula' in v ? (formulas++, '=' + v.formula) : v;
       });
     });
-    sheets[name] = grid;
+    sheets[name] = Array.from(grid, row => (row ? Array.from(row, v => v ?? null) : [])); // fill gaps left by empty rows and cells
   }
   assert.ok(formulas > (mod.engine === 'lease' ? 200 : mod.engine ? 300 : 1000), `only ${formulas} formulas`);
   const hf = (HF as any).HyperFormula.buildFromSheets(sheets, { licenseKey: 'gpl-v3' });
@@ -39,4 +40,17 @@ for (const mod of [p3, renewables, tollRoad, utility, digital]) test(`${mod.id}:
     assert.ok(Math.abs((got[r][c] as number) - v) < 1e-9, `Model!R${r + 1}C${c + 1}: ${got[r][c]} vs ${v}`);
   }));
   assert.ok(compared > (mod.engine === 'lease' ? 150 : mod.engine ? 300 : 1000));
+  // Dashboard: every value is a link, and it recalculates to the cell it points at.
+  const dash = hf.getSheetValues(hf.getSheetId('Dashboard'));
+  let links = 0;
+  sheets.Dashboard.forEach((row, r) => row?.forEach((f, c) => {
+    if (typeof f !== 'string' || !f.startsWith('=')) return;
+    const [, sh, col, rr] = f.match(/^=(Inputs|Model)!\$([A-Z]+)\$(\d+)$/)!;
+    const ci = [...col].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+    const target = sh === 'Model' ? want[+rr - 1][ci] : m.sheetValues().Inputs[+rr - 1][ci];
+    links++;
+    if (typeof target === 'number') assert.ok(Math.abs((dash[r][c] as number) - target) < 1e-9, `Dashboard!R${r + 1}C${c + 1}`);
+  }));
+  assert.ok(links > 30, `only ${links} dashboard links`);
+  hf.destroy();
 });

@@ -261,6 +261,12 @@ export function projectFinance(mod: Module): ModelDef {
     inputs: [...engineInputs.map(i => ({ ...i, ...mod.defaults?.[i.id] })), ...mod.inputs],
     items: withEq,
     columns: v => v.con_years + v.ops_years,
+    dash: {
+      units: 'C$ millions, nominal, annual periods',
+      inputs: ['start_year', 'con_years', 'ops_years', 'capex', 'cp', 'ap_capital', 'ap_services', 'mw', 'energy_p50', 'energy_sizing', 'ppa_price', 'contract_years', 'traffic', 'toll', 'traffic_growth', 'cpi', 'tax_rate', 'rate', 'tenor', 'dscr', 'max_gearing', 'lockup'],
+      outputs: ['equity_irr', 'project_irr', 'moic', 'avg_yield', 'payback', 'uses', 'debt', 'equity', 'gearing', 'min_dscr', 'avg_dscr', 'llcr'],
+      rows: ['revenue', 'ebitda', 'cfads', 'ds', 'dscr_actual', 'debt_close', 'dist', 'equity_cf'],
+    },
   };
 }
 

@@ -41,7 +41,7 @@ export function CasesPanel({ id, m, values, defaults, setValues, metrics }: { id
           <thead><tr><th>Measure</th>{all.map(c => <th key={c.name}>{c.name}</th>)}</tr></thead>
           <tbody>
             {metrics.map(([label], i) => <tr key={label}><td>{label}</td>{out.map((r, j) => <td key={j}>{r[i]}</td>)}</tr>)}
-            <tr><td>Inputs changed from the loaded example</td>{all.map(c => <td key={c.name}>{changed(c.values)}</td>)}</tr>
+            <tr><td>Inputs changed from the start</td>{all.map(c => <td key={c.name}>{changed(c.values)}</td>)}</tr>
             {cases.length > 0 && (
               <tr><td></td><td></td>{cases.map(c => (
                 <td key={c.name}>

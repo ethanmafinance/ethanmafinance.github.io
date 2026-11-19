@@ -9,6 +9,7 @@ import { ChecksCard, fmt, InputsPanel, useDownload } from './ModelPage.tsx';
 import { BarChart, LineChart } from './Charts.tsx';
 import { Calibration, MemoCard, Rows } from './Memo.tsx';
 import { CasesPanel } from './Cases.tsx';
+import { SaveButton } from './Saved.tsx';
 import { comp, GROUPS, groupOf, impliedPerShare, median, type Comp } from '../engine/comps.ts';
 
 type V = Record<string, number>;
@@ -36,14 +37,14 @@ export const parseEquityRoute = (route: string) => {
     wacc: q.get('w') === 'direct' ? 'direct' : 'capm',
     terminal: q.get('t') === 'multiple' ? 'multiple' : 'growth',
   };
-  return { ticker, a };
+  return { ticker, a, prefill: q.get('ticker')?.toUpperCase() ?? '' };
 };
 const hrefOf = (t: string, a: Answers) => `#/equity/${t}?y=${a.years}&s=${a.scenario}&w=${a.wacc}&t=${a.terminal}`;
 
-export function EquityStart() {
+export function EquityStart({ prefill = '' }: { prefill?: string }) {
   const [list, setList] = useState<Listing[]>();
   const [err, setErr] = useState(false);
-  const [ticker, setTicker] = useState('');
+  const [ticker, setTicker] = useState(prefill);
   const [a, setA] = useState<Answers>(DEFAULT);
   useEffect(() => { loadIndex().then(d => setList(d.tickers), () => setErr(true)); }, []);
   const t = ticker.trim().toUpperCase();
@@ -87,7 +88,7 @@ export function EquityStart() {
   );
 }
 
-export function EquityModel({ ticker, a }: { ticker: string; a: Answers }) {
+export function EquityModel({ ticker, a, start }: { ticker: string; a: Answers; start?: V }) {
   const [co, setCo] = useState<Company | null>();
   useEffect(() => {
     let live = true;
@@ -96,7 +97,7 @@ export function EquityModel({ ticker, a }: { ticker: string; a: Answers }) {
   }, [ticker]);
   if (co === undefined) return <p className="note">Loading {ticker}...</p>;
   if (co === null) return <div className="card"><h1>{ticker} is not covered</h1><p className="note">Only companies in the data file can be valued. <a href="#/equity">Choose another ticker</a>.</p></div>;
-  return <EquityView key={ticker + JSON.stringify(a)} co={co} a={a} />;
+  return <EquityView key={ticker + JSON.stringify(a)} co={co} a={a} start={start} />;
 }
 
 const WACC_STEPS = [-0.01, -0.005, 0, 0.005, 0.01];
@@ -116,9 +117,9 @@ export function EquityExample({ id }: { id: string }) {
   return <EquityView co={e.company} a={e.answers} over={e.overrides} checks={e.checks} title={e.name} />;
 }
 
-function EquityView({ co, a, over, checks, title }: { co: Company; a: Answers; over?: Overrides; checks?: Module['checks']; title?: string }) {
+function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Answers; over?: Overrides; checks?: Module['checks']; title?: string; start?: V }) {
   const { def, missing } = useMemo(() => dcf(co, a, over), [co, a, over]);
-  const defaults = useMemo(() => Object.fromEntries(def.inputs.map(i => [i.id, i.value])), [def]);
+  const defaults = useMemo(() => ({ ...Object.fromEntries(def.inputs.map(i => [i.id, i.value])), ...start }), [def, start]);
   const [values, setValues] = useState<V>(defaults);
   const model = useMemo(() => new Model(def, defaults), [def, defaults]);
   const res = useMemo(() => { model.set(values); return model.results(); }, [model, values]);
@@ -160,7 +161,7 @@ function EquityView({ co, a, over, checks, title }: { co: Company; a: Answers; o
             <h1 style={{ fontSize: 22, margin: 0 }}>{title ?? `${co.name} (${co.ticker})`}</h1>
             <div className="note">Unlevered DCF, {a.scenario} case, {values.years}-year forecast, {values.tv_mode ? 'exit multiple' : 'perpetuity growth'} terminal value. {ccy} millions except per share. Filings to FY{co.fyEnds.at(-1)!.slice(0, 4)}; price {co.price.date}. <a href="#/equity">Change ticker or answers</a></div>
           </div>
-          <button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button>
+          <span className="head-actions"><SaveButton item={{ kind: 'equity', ticker: co.ticker, a, name: title ?? `${co.ticker} DCF`, values, headline: `${ccy}${fmt(res.scalar.per_share, 'px')} per share` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
         </div>
 
         {missing.length > 0 && (

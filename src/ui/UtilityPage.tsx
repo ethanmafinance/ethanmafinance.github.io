@@ -1,3 +1,4 @@
+import { SaveButton } from './Saved.tsx';
 // Regulated utility page: same input panel, calibration table and Excel export as the project finance page,
 // with utility outputs (rate base, revenue requirement, earned ROE, equity value against a rate base multiple).
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
@@ -27,9 +28,9 @@ const DRIVERS: [string, string, number][] = [
 const pct2 = (v: number) => `${(v * 100).toFixed(2)}%`;
 const lab = (id: string, d: number) => (id === 'exit_mult' ? `${d}x` : `${+(d * 100).toFixed(2)}pt`);
 
-export function UtilityPage({ mod }: { mod: Module }) {
+export function UtilityPage({ mod, start, user }: { mod: Module; start?: Record<string, number>; user?: boolean }) {
   const def = useMemo(() => regulated(mod), [mod]);
-  const defaults = useMemo(() => Object.fromEntries(def.inputs.map(i => [i.id, i.value])), [def]);
+  const defaults = useMemo(() => start ?? Object.fromEntries(def.inputs.map(i => [i.id, i.value])), [def, start]);
   const [values, setValues] = useState<V>(defaults);
   const model = useMemo(() => new Model(def, defaults), [def, defaults]);
   const res = useMemo(() => { model.set(values); return model.results(); }, [model, values]);
@@ -66,7 +67,7 @@ export function UtilityPage({ mod }: { mod: Module }) {
             <h1 style={{ fontSize: 22, margin: 0 }}>{mod.name}</h1>
             <div className="note">{mod.blurb} C$ millions, nominal, annual periods.</div>
           </div>
-          <button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button>
+          <span className="head-actions"><SaveButton item={{ kind: 'infra', mod: mod.id, name: user ? `${mod.name} (my build)` : mod.name, values, headline: `Equity value C$${fmt(res.scalar.eq_value)}m` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
         </div>
 
         <div className="kpis">

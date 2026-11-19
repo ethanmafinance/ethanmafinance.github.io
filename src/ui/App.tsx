@@ -7,14 +7,13 @@ import { renewables } from '../modules/renewables.ts';
 import { tollRoad } from '../modules/tollRoad.ts';
 import { utility } from '../modules/utility.ts';
 import { digital } from '../modules/digital.ts';
-import { ModelPage } from './ModelPage.tsx';
-import { UtilityPage } from './UtilityPage.tsx';
-import { DigitalPage } from './DigitalPage.tsx';
 import { HowItWorks } from './HowItWorks.tsx';
 import { EQUITY_EXAMPLES, EquityExample, EquityModel, EquityStart, equityVerified, parseEquityRoute } from './EquityPage.tsx';
 import { PortfolioPage } from './Portfolio.tsx';
 import { MarketsPage, MarketTiles, Source } from './Markets.tsx';
 import { useMarket } from '../data/boc.ts';
+import { AssetPage, Builder } from './Build.tsx';
+import { readSaved, SavedTiles } from './Saved.tsx';
 
 const LIVE = { p3, renewables, toll: tollRoad, utility, digital };
 // Infrastructure asset classes in picker order. `id` set = live module.
@@ -51,15 +50,17 @@ const useHash = () => {
 
 export function App() {
   const route = useHash();
-  const mod = route.startsWith('model/') ? LIVE[route.slice(6) as keyof typeof LIVE] : undefined;
+  const isExample = route.startsWith('example/');
+  const mod = route.startsWith('model/') ? LIVE[route.slice(6) as keyof typeof LIVE] : isExample ? LIVE[route.slice(8) as keyof typeof LIVE] : undefined;
   const eq = route.startsWith('equity') ? parseEquityRoute(route) : undefined;
-  const page = mod ? 'model' : eq ? 'equity' : (['infra', 'markets', 'portfolio', 'how'] as const).find(p => p === route) ?? 'home';
+  const saved = route.startsWith('saved/') ? readSaved().find(x => x.sid === route.slice(6)) : undefined;
+  const page = saved ? 'saved' : mod ? 'model' : eq ? 'equity' : (['infra', 'markets', 'portfolio', 'how'] as const).find(p => p === route) ?? 'home';
   const nav: [string, string, boolean][] = [
     ['#/', 'Dashboard', page === 'home'],
     ['#/infra', 'Infrastructure', page === 'infra' || page === 'model'],
     ['#/equity', 'Equities', page === 'equity'],
     ['#/markets', 'Market stats', page === 'markets'],
-    ['#/portfolio', 'Portfolio', page === 'portfolio'],
+    ['#/portfolio', 'Portfolio', page === 'portfolio' || page === 'saved'],
     ['#/how', 'How it works', page === 'how'],
   ];
   return (
@@ -76,8 +77,9 @@ export function App() {
         </div>
       </header>
       <main className="page">
-        {page === 'model' && mod && (mod.engine === 'regulated' ? <UtilityPage key={mod.id} mod={mod} /> : mod.engine === 'lease' ? <DigitalPage key={mod.id} mod={mod} /> : <ModelPage key={mod.id} mod={mod} />)}
-        {page === 'equity' && eq && (route.startsWith('equity/example/') ? <EquityExample id={route.slice(15)} /> : eq.ticker ? <EquityModel ticker={eq.ticker} a={eq.a} /> : <EquityStart />)}
+        {page === 'model' && mod && (isExample ? <AssetPage key={'ex' + mod.id} mod={mod} /> : <Builder key={mod.id} mod={mod} example={EXAMPLES.find(e => e.mod === mod)?.name} />)}
+        {page === 'equity' && eq && (route.startsWith('equity/example/') ? <EquityExample id={route.slice(15)} /> : eq.ticker ? <EquityModel ticker={eq.ticker} a={eq.a} /> : <EquityStart prefill={eq.prefill} />)}
+        {saved && (saved.kind === 'equity' ? <EquityModel ticker={saved.ticker!} a={saved.a!} start={saved.values} /> : LIVE[saved.mod as keyof typeof LIVE] && <AssetPage key={saved.sid} mod={LIVE[saved.mod as keyof typeof LIVE]} start={saved.values} user />)}
         {page === 'how' && <HowItWorks />}
         {page === 'markets' && <MarketsPage />}
         {page === 'portfolio' && <PortfolioPage />}
@@ -93,18 +95,20 @@ function Dashboard() {
   const market = useMarket();
   const examples = useMemo(() => EXAMPLES.filter(e => verified(e.mod)), []);
   const eqExamples = useMemo(() => EQUITY_EXAMPLES.filter(equityVerified), []);
+  const [ticker, setTicker] = useState('');
+  const go = (h: string) => { location.hash = h; };
   return (
     <>
       <section className="hero">
         <h1>Value infrastructure and equities</h1>
-        <p className="lede">Project finance models for contracted infrastructure and DCF valuations for listed companies. Every default shows its public source, and every model downloads to Excel with live formulas.</p>
+        <p className="lede">Enter a deal's terms or a ticker and the platform builds the model: project finance for contracted infrastructure, DCF for listed companies. Every model downloads to Excel with live formulas.</p>
       </section>
 
       <div className="primary">
         <div className="glass prime">
           <div className="widget-head"><span className="eyebrow">Infrastructure</span><span className="pill">Live</span></div>
           <strong className="prime-title">Value an infrastructure asset</strong>
-          <span className="prime-text">Pick an asset class, set the deal terms, and get sources and uses, sculpted debt, DSCR and LLCR, equity IRR, sensitivities and an Excel model.</span>
+          <span className="prime-text">Pick an asset class and enter your deal inputs. The platform builds sources and uses, sculpted debt, DSCR and LLCR, equity IRR, sensitivities, a memo and an Excel model.</span>
           <ul className="chips">
             {ASSETS.map(a => <li key={a.name}>{a.id
               ? <a className="chip on" href={`#/model/${a.id}`}>{a.name}</a>
@@ -112,40 +116,36 @@ function Dashboard() {
           </ul>
           <a className="widget-cta" href="#/infra">See all asset classes</a>
         </div>
-        <a className="glass prime" href="#/equity">
+        <div className="glass prime clickable" role="link" tabIndex={0} onClick={() => go('#/equity')} onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) go('#/equity'); }}>
           <div className="widget-head"><span className="eyebrow">Equities</span><span className="pill">Live</span></div>
           <strong className="prime-title">Value a listed company</strong>
-          <span className="prime-text">Enter a ticker and answer four questions. The DCF builds itself from SEC filings and the latest close, with a reverse DCF of what the price implies, and every assumption stays editable on the site or in Excel.</span>
-          <div className="ticker-mock" aria-hidden="true"><span>Ticker</span><span className="caret" /></div>
-        </a>
+          <span className="prime-text">Type any ticker that files with the SEC. The platform pulls its filings and latest close and builds the DCF, with a reverse DCF of what the price implies. Every assumption stays editable on the site or in Excel.</span>
+          <form className="ticker-box" onClick={e => e.stopPropagation()} onSubmit={e => { e.preventDefault(); const t = ticker.trim().toUpperCase(); if (t) go(`#/equity?ticker=${encodeURIComponent(t)}`); }}>
+            <input aria-label="Ticker" value={ticker} onChange={e => setTicker(e.target.value)} onKeyDown={e => e.stopPropagation()} placeholder="Type a ticker, e.g. ENB" autoCapitalize="characters" autoComplete="off" spellCheck={false} />
+            <button aria-label="Value this ticker">Value</button>
+          </form>
+        </div>
       </div>
 
       <h2 className="side-head">More tools</h2>
       <div className="secondary">
-        <a className="glass side" href="#/markets">
+        <a className="glass side tint-teal" href="#/markets">
           <div className="widget-head"><h3>Market stats</h3><span className="tag live">Live</span></div>
           {market.data ? <MarketTiles data={market.data} /> : <span className="note">{market.error ? 'Bank of Canada data could not load.' : 'Loading Bank of Canada data...'}</span>}
-          <span className="widget-cta">Yield curve and inflation</span>
         </a>
-        <div className="glass side">
-          <div className="widget-head"><h3>Past analysis</h3><span className="tag">{examples.length + eqExamples.length} verified</span></div>
+        <div className="glass side tint-indigo">
+          <div className="widget-head"><h3>Valuation case studies</h3><span className="tag">{examples.length + eqExamples.length} verified</span></div>
           {examples.map(e => (
-            <a key={e.mod.id} className="example" href={`#/model/${e.mod.id}`}>
-              <strong>{e.name}</strong>
-              <span className="note">{e.meta}. {e.what}</span>
-            </a>
+            <a key={e.mod.id} className="example" href={`#/example/${e.mod.id}`}><strong>{e.name}</strong><span>{e.meta}</span></a>
           ))}
           {eqExamples.map(e => (
-            <a key={e.id} className="example" href={`#/equity/example/${e.id}`}>
-              <strong>{e.name.split(':')[0]}</strong>
-              <span className="note">{e.meta}. DCF on management's capital plan and rate base growth from its filings, with a reverse DCF of what the price implies. Matches reported revenue, EBIT and D&A and the C$28.8 billion plan.</span>
-            </a>
+            <a key={e.id} className="example" href={`#/equity/example/${e.id}`}><strong>{e.name.split(':')[0]}</strong><span>{e.meta}</span></a>
           ))}
-          {!examples.length && <span className="note">Examples appear once they match their published figures.</span>}
+          {!examples.length && <span className="note">Case studies appear once they match their published figures.</span>}
         </div>
-        <a className="glass side" href="#/portfolio">
-          <div className="widget-head"><h3>Portfolio tracker</h3><span className="tag live">Live</span></div>
-          <span className="note">Your holdings at daily closing prices, saved in your browser only.</span>
+        <a className="glass side tint-slate" href="#/portfolio">
+          <div className="widget-head"><h3>Portfolio</h3><span className="tag live">Live</span></div>
+          <SavedTiles />
         </a>
       </div>
       {market.data && <Source />}
@@ -157,7 +157,7 @@ function InfraPicker() {
   return (
     <>
       <h1>Value infrastructure</h1>
-      <p className="lede">Choose an asset class. Each one opens a model loaded with a real project's public figures that you can change.</p>
+      <p className="lede">Choose an asset class. Each one opens an empty model: you enter the deal inputs and the platform builds the model and analysis. To see a finished one first, open a valuation case study from the dashboard.</p>
       <div className="grid-cards">
         {ASSETS.map(a => a.id ? (
           <a key={a.name} className="card module-card" href={`#/model/${a.id}`}>

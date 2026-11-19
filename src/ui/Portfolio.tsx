@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { valuePortfolio, type Holding, type Quote } from '../engine/portfolio.ts';
 import { DATA, loadIndex, type Listing } from './EquityPage.tsx';
 import { VALET } from '../data/boc.ts';
+import { SavedList } from './Saved.tsx';
 
 const KEY = 'portfolio.v1';
 const read = (): Holding[] => { try { const v = JSON.parse(localStorage.getItem(KEY) ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
@@ -49,8 +50,8 @@ export function PortfolioPage() {
 
   return (
     <>
-      <h1>Portfolio tracker</h1>
-      <p className="lede">Your holdings at the latest close, in Canadian dollars. Saved in this browser only: nothing is sent anywhere, and clearing site data removes it.</p>
+      <h1>Portfolio</h1>
+      <p className="lede">Your holdings at the latest close in Canadian dollars, and the models you saved. Saved in this browser only: nothing is sent anywhere, and clearing site data removes it.</p>
       <form className="card eq-form" onSubmit={e => { e.preventDefault(); add(); }}>
         <div className="pf-add">
           <label><span>Ticker</span><input list="pf-tickers" value={form.ticker} onChange={e => setForm({ ...form, ticker: e.target.value })} placeholder="FTS" autoComplete="off" spellCheck={false} /></label>
@@ -93,6 +94,7 @@ export function PortfolioPage() {
         </>
       )}
       {hs.length === 0 && <p className="note">No holdings yet. Add one above.</p>}
+      <div style={{ marginTop: 16 }}><SavedList /></div>
     </>
   );
 }

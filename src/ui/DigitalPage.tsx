@@ -1,3 +1,4 @@
+import { SaveButton } from './Saved.tsx';
 // Data centre page: lease DCF (Engine D) with the shared input panel, calibration table, cases, memo and Excel export.
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { comp, median, type Comp } from '../engine/comps.ts';
@@ -27,9 +28,9 @@ const DRIVERS: [string, string, number, 'rel' | 'abs'][] = [
 const pct2 = (v: number) => `${(v * 100).toFixed(2)}%`;
 const lab = (d: number, kind: 'rel' | 'abs', id: string) => (kind === 'rel' ? `${d * 100}%` : id === 'renew' || id === 'mtm' ? `${d * 100}pt` : `${d * 1e4}bp`);
 
-export function DigitalPage({ mod }: { mod: Module }) {
+export function DigitalPage({ mod, start, user }: { mod: Module; start?: Record<string, number>; user?: boolean }) {
   const def = useMemo(() => lease(mod), [mod]);
-  const defaults = useMemo(() => Object.fromEntries(def.inputs.map(i => [i.id, i.value])), [def]);
+  const defaults = useMemo(() => start ?? Object.fromEntries(def.inputs.map(i => [i.id, i.value])), [def, start]);
   const [values, setValues] = useState<V>(defaults);
   const model = useMemo(() => new Model(def, defaults), [def, defaults]);
   const res = useMemo(() => { model.set(values); return model.results(); }, [model, values]);
@@ -67,7 +68,7 @@ export function DigitalPage({ mod }: { mod: Module }) {
             <h1 style={{ fontSize: 22, margin: 0 }}>{mod.name}</h1>
             <div className="note">{mod.blurb} US$ millions, nominal, annual periods.</div>
           </div>
-          <button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button>
+          <span className="head-actions"><SaveButton item={{ kind: 'infra', mod: mod.id, name: user ? `${mod.name} (my build)` : mod.name, values, headline: `Value US$${fmt(res.scalar.value)}m` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
         </div>
 
         <div className="kpis">

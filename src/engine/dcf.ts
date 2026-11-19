@@ -221,6 +221,12 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       inputs: inputs.map(i => ({ ...i, ...over[i.id] })),
       items: items.map(it => ('kind' in it ? { ...it, f: (x: any) => eq(it.f(x)) } : it)) as Item[],
       columns: vv => H_ + vv.years,
+      dash: {
+        units: `${c.currency} millions except per share; FY = reported, E = forecast`,
+        inputs: ['years', 'g1', 'g_term', 'm1', 'm_target', 'tax', 'reinv1', 'rf', 'beta', 'erp', 'kd', 'wacc_in', 'exit_mult', 'shares', 'price'],
+        outputs: ['per_share', 'upside', 'ev', 'eq', 'mkt_ev', 'ke', 'wacc', 'tv_share', 'ev_ebitda'],
+        rows: ['rev', 'growth', 'ebitda', 'ebit', 'margin', 'nopat', 'capex', 'fcf'],
+      },
     },
     missing,
   };
