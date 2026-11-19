@@ -138,14 +138,17 @@ async function consensus(symbols) {
       }
       throw new Error('failed');
     };
-    // 4 requests at a time, about 3,600 symbols in a few minutes
+    // 4 requests at a time, about 3,600 symbols in a few minutes. If Yahoo throttles (25 failures in a row), stop and
+    // keep the saved copy for the rest, so a block never stalls the deploy.
     const queue = [...symbols];
+    let streak = 0;
     await Promise.all(Array.from({ length: 4 }, async () => {
-      for (let s; (s = queue.shift()); ) {
-        try { out[s] = await one(s); } catch { failed++; if (old[s]) out[s] = old[s]; }
+      for (let s; streak < 25 && (s = queue.shift()); ) {
+        try { out[s] = await one(s); streak = 0; } catch { failed++; streak++; if (old[s]) out[s] = old[s]; }
         await sleep(100);
       }
     }));
+    if (streak >= 25) { console.log(`consensus stopped after 25 failures in a row; ${queue.length} symbols keep the saved copy`); for (const s of queue) if (old[s]) out[s] = old[s]; }
   } catch (e) { console.log(`consensus download failed (${e.message}); using the saved copy`); return old; }
   console.log(`consensus: ${Object.values(out).filter(x => x.rows.length).length} of ${symbols.length} symbols, ${failed} failed`);
   return { ...old, ...out };
