@@ -3,12 +3,42 @@
 // for the last fiscal year; P/E uses net income including non-controlling interests (us-gaap ProfitLoss when tagged).
 import { debtOf, type Company } from './dcf.ts';
 
+// Curated by business model for the infrastructure names and the largest companies covered, where the SEC industry code
+// gives the wrong peers (Shell's code 1311 matches US shale producers; Apple's 3571 matches PC makers). Each group has at
+// least 4 covered members, so every member has 3 or more peers. Everyone else is matched on the industry code.
 export const GROUPS: Record<string, string[]> = {
-  'Regulated utilities': ['AEP', 'AWK', 'D', 'DUK', 'ED', 'EXC', 'FTS', 'NEE', 'SO', 'SRE', 'XEL'],
-  'Pipelines and midstream': ['ENB', 'KMI', 'LNG', 'OKE', 'PBA', 'TRP', 'WMB'],
+  'Regulated utilities': ['AEP', 'AWK', 'D', 'DUK', 'ED', 'EMA', 'EXC', 'FTS', 'NEE', 'SO', 'SRE', 'XEL'],
+  'Pipelines and midstream': ['ENB', 'EPD', 'KMI', 'LNG', 'MPLX', 'OKE', 'PBA', 'TRGP', 'TRP', 'WMB'],
   'Towers and data centres': ['AMT', 'CCI', 'DLR', 'EQIX', 'SBAC'],
-  'Railways': ['CP', 'CSX', 'NSC', 'UNP'],
-  'Waste': ['RSG', 'WM'],
+  'Railways': ['CNI', 'CP', 'CSX', 'NSC', 'UNP'],
+  'Waste': ['CWST', 'GFL', 'RSG', 'WCN', 'WM'],
+  'Megacap technology': ['AAPL', 'AMZN', 'GOOGL', 'META', 'MSFT'],
+  'Semiconductors': ['ADI', 'AMD', 'ARM', 'AVGO', 'INTC', 'MCHP', 'MRVL', 'MU', 'NVDA', 'NXPI', 'ON', 'QCOM', 'TXN'],
+  'Semiconductor equipment': ['AMAT', 'ASML', 'KLAC', 'LRCX', 'TER'],
+  'Enterprise software': ['ADBE', 'ADSK', 'CDNS', 'CRM', 'DDOG', 'INTU', 'NOW', 'ORCL', 'PLTR', 'SAP', 'SNOW', 'SNPS', 'TEAM', 'WDAY'],
+  'Security and network software': ['CRWD', 'FTNT', 'NET', 'OKTA', 'PANW', 'ZS'],
+  'Networking equipment': ['ANET', 'CIEN', 'CSCO', 'HPE'],
+  'IT services': ['ACN', 'CTSH', 'EPAM', 'IBM', 'IT'],
+  'Payment networks': ['FIS', 'GPN', 'MA', 'PYPL', 'V'],
+  'Pharmaceuticals': ['ABBV', 'AMGN', 'AZN', 'BMY', 'GILD', 'JNJ', 'LLY', 'MRK', 'NVO', 'PFE', 'REGN', 'VRTX'],
+  'Medical devices': ['ABT', 'BDX', 'BSX', 'EW', 'ISRG', 'MDT', 'SYK'],
+  'Life science tools': ['A', 'DHR', 'IQV', 'MTD', 'TMO', 'WAT'],
+  'Beverages': ['BUD', 'KDP', 'KO', 'MNST', 'PEP', 'STZ'],
+  'Household products': ['CHD', 'CL', 'CLX', 'KMB', 'PG', 'UL'],
+  'Tobacco': ['BTI', 'MO', 'PM', 'TPB'],
+  'Big-box retail': ['BJ', 'COST', 'DG', 'DLTR', 'TGT', 'WMT'],
+  'Restaurants': ['CMG', 'DRI', 'MCD', 'QSR', 'SBUX', 'YUM'],
+  'Travel and lodging': ['ABNB', 'BKNG', 'EXPE', 'HLT', 'MAR'],
+  'Integrated oil and gas': ['BP', 'CVE', 'CVX', 'E', 'EQNR', 'IMO', 'SHEL', 'SU', 'TTE'],
+  'Oil and gas producers': ['CNQ', 'COP', 'DVN', 'EOG', 'FANG', 'OVV', 'OXY'],
+  'Refining': ['DK', 'MPC', 'PBF', 'PSX', 'VLO'],
+  'Mining': ['BHP', 'FCX', 'NEM', 'RIO', 'SCCO', 'TECK'],
+  'Bitcoin miners and AI data centre hosts': ['APLD', 'CIFR', 'CLSK', 'CORZ', 'HUT', 'IREN', 'MARA', 'RIOT', 'WULF'],
+  'Telecom carriers': ['CHTR', 'CMCSA', 'RCI', 'T', 'TMUS', 'TU', 'VZ'],
+  'Aerospace and defence': ['BA', 'GD', 'GE', 'HWM', 'LMT', 'NOC', 'RTX', 'TDG'],
+  'Machinery': ['CAT', 'CMI', 'DE', 'PCAR'],
+  'Electrical and grid equipment': ['EMR', 'ETN', 'GEV', 'HUBB', 'PWR', 'ROK', 'VRT'],
+  'Exchanges and data': ['CBOE', 'CME', 'ICE', 'MCO', 'MSCI', 'NDAQ', 'SPGI'],
 };
 export const groupOf = (t: string) => Object.entries(GROUPS).find(([, ts]) => ts.includes(t))?.[0];
 
@@ -74,7 +104,7 @@ export const multiples = (r: Row) => ({
 // until at least 5 qualify, keeping the 10 closest in market value.
 export function pickPeers(self: Row, rows: Row[], n = 10): { peers: Row[]; basis: string } {
   const group = groupOf(self.ticker);
-  if (group) return { peers: rows.filter(r => GROUPS[group].includes(r.ticker) && r.ticker !== self.ticker), basis: `the site's ${group.toLowerCase()} group` };
+  if (group) return { peers: rows.filter(r => GROUPS[group].includes(r.ticker) && r.ticker !== self.ticker), basis: `the site's ${group[0].toLowerCase() + group.slice(1)} group` };
   if (!self.sic) return { peers: [], basis: 'no industry code in the SEC data' };
   for (const d of [4, 3, 2]) {
     const code = self.sic.slice(0, d);

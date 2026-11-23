@@ -356,6 +356,9 @@ function priced({ sym, us, rec: r0 }, px, rf, listing, cons = {}) {
     if (!ratio && !/depositary/i.test(l.name) && raw > 0.67 && raw < 1.5) rec = { ...rec, shares: fromListing(`the filing count of ${rec.shares.v.toFixed(1)}m dates from ${rec.shares.asOf}`) };
     else if (!ratio) throw new Error(`share count does not reconcile with the US listing (${raw.toFixed(2)} ordinary shares per listed share)`);
     else if (ratio !== 1) rec = { ...rec, shares: { ...rec.shares, v: +(rec.shares.v / ratio).toFixed(3), adr: +ratio.toPrecision(6), concept: `${rec.shares.concept}, divided by ${+ratio.toPrecision(4)} ordinary shares per ADS` } };
+  } else if (listed && (rec.shares.v / listed > 20 || rec.shares.v / listed < 0.05)) {
+    // More than 20x off the listing is a scale error in the tag or a reverse split, not a share class or a buyback (Repay tagged FY2025 diluted shares 1,000x too large).
+    rec = { ...rec, shares: fromListing(`the filing count of ${rec.shares.v.toFixed(1)}m is ${(rec.shares.v / listed).toFixed(0)}x the listing's: a scale error in the tag or a reverse split since`) };
   }
   const index = rec.currency === 'CAD' ? '^GSPTSE' : '^GSPC';
   const price = { v: +q.meta.regularMarketPrice.toFixed(4), date: new Date(q.meta.regularMarketTime * 1000).toISOString().slice(0, 10), symbol: sym, exchange: q.meta.fullExchangeName, hi52: q.meta.fiftyTwoWeekHigh, lo52: q.meta.fiftyTwoWeekLow };
