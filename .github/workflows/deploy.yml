@@ -27,7 +27,7 @@ jobs:
           ( curl -sSfL --retry 3 -A "$UA" -o "$RUNNER_TEMP/cf.zip" https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip             && curl -sSfL --retry 3 -A "$UA" -o "$RUNNER_TEMP/subs.zip" https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip             && FACTS_ZIP="$RUNNER_TEMP/cf.zip" SUBS_ZIP="$RUNNER_TEMP/subs.zip" node scripts/equities.mjs --all ) || echo "equity refresh failed; using committed data"
         env: { SEC_UA: '${{ vars.SEC_UA }}' }
       - run: npm run build
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with: { path: dist }
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
