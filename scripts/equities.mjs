@@ -145,12 +145,16 @@ async function consensus(symbols) {
     if (!cookie || !crumb || crumb.length > 20) throw new Error('no Yahoo session');
     const one = async s => {
       for (let i = 1; i <= 3; i++) {
-        const res = await fetch(`https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(s)}?modules=earningsTrend&crumb=${encodeURIComponent(crumb)}`, { headers: { 'User-Agent': BROWSER, Cookie: cookie }, signal: AbortSignal.timeout(20000) }).catch(() => null);
+        const res = await fetch(`https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(s)}?modules=earningsTrend,defaultKeyStatistics&crumb=${encodeURIComponent(crumb)}`, { headers: { 'User-Agent': BROWSER, Cookie: cookie }, signal: AbortSignal.timeout(20000) }).catch(() => null);
         if (res?.status === 404) return { date: today, rows: [] }; // Yahoo has no such symbol: no consensus
         if (res?.ok) {
-          const tr = (await res.json()).quoteSummary?.result?.[0]?.earningsTrend?.trend ?? [];
+          const q = (await res.json()).quoteSummary?.result?.[0];
+          const tr = q?.earningsTrend?.trend ?? [];
           const raw = o => o?.raw ?? null;
-          return { date: today, rows: tr.filter(x => ['0y', '+1y'].includes(x.period)).map(x => ({ end: x.endDate,
+          // Share counts and the last split, a third count for priced() to check the filing's against.
+          const k = q?.defaultKeyStatistics ?? {}, [a, b] = String(k.lastSplitFactor ?? '').split(':').map(Number);
+          const sh = { out: raw(k.sharesOutstanding), implied: raw(k.impliedSharesOutstanding), ...(a > 0 && b > 0 && raw(k.lastSplitDate) ? { split: a / b, splitDate: new Date(raw(k.lastSplitDate) * 1000).toISOString().slice(0, 10) } : {}) };
+          return { date: today, sh, rows: tr.filter(x => ['0y', '+1y'].includes(x.period)).map(x => ({ end: x.endDate,
             rev: raw(x.revenueEstimate?.avg), revAgo: raw(x.revenueEstimate?.yearAgoRevenue), nRev: raw(x.revenueEstimate?.numberOfAnalysts), revCur: x.revenueEstimate?.revenueCurrency ?? null,
             eps: raw(x.earningsEstimate?.avg), nEps: raw(x.earningsEstimate?.numberOfAnalysts), epsCur: x.earningsEstimate?.earningsCurrency ?? null })) };
         }
@@ -360,9 +364,27 @@ function priced({ sym, us, rec: r0 }, px, rf, listing, cons = {}) {
     if (!ratio && !/depositary/i.test(l.name) && raw > 0.67 && raw < 1.5) rec = { ...rec, shares: fromListing(`the filing count of ${rec.shares.v.toFixed(1)}m dates from ${rec.shares.asOf}`) };
     else if (!ratio) throw new Error(`share count does not reconcile with the US listing (${raw.toFixed(2)} ordinary shares per listed share)`);
     else if (ratio !== 1) rec = { ...rec, shares: { ...rec.shares, v: +(rec.shares.v / ratio).toFixed(3), adr: +ratio.toPrecision(6), concept: `${rec.shares.concept}, divided by ${+ratio.toPrecision(4)} ordinary shares per ADS` } };
-  } else if (listed && (rec.shares.v / listed > 20 || rec.shares.v / listed < 0.05)) {
-    // More than 20x off the listing is a scale error in the tag or a reverse split, not a share class or a buyback (Repay tagged FY2025 diluted shares 1,000x too large).
-    rec = { ...rec, shares: fromListing(`the filing count of ${rec.shares.v.toFixed(1)}m is ${(rec.shares.v / listed).toFixed(0)}x the listing's: a scale error in the tag or a reverse split since`) };
+  } else {
+    // US filer. The filing count can predate a split, carry a scale error in the tag (Repay tagged FY2025 diluted shares
+    // 1,000x too large), or count only the listed class of an Up-C. Check it against the listing and Yahoo's count
+    // (all classes) and take a count two sources agree on within 1.5x. Tested 2026-11-23 on the 128 companies more than 1.5x off the listing.
+    const fs = rec.shares, ys = cons[sym]?.sh, y = (ys?.implied || ys?.out || 0) / 1e6;
+    const sp = ys?.split && ys.splitDate > fs.asOf ? ys.split : 1, f = fs.v * sp;
+    const ag = (a, b) => a > 0 && b > 0 && Math.max(a / b, b / a) <= 1.5;
+    const x = (a, b) => `${(a / b).toFixed(1)}x`;
+    if (listed > 1.5 * f && /\bclass [a-z]\b/i.test(l?.name ?? '')) {
+      // Up-C or dual class: the filing counts the listed class; the listing also counts the classes paired with exchangeable
+      // units (Clearway, Mobileye, EVgo). Those units are the non-controlling interest, so it is not deducted again.
+      const nci = rec.bal.nci;
+      rec = { ...rec, shares: fromListing(`the filing count of ${f.toFixed(1)}m covers the listed class only; the listing counts every class, ${x(listed, f)} as many`),
+        bal: { ...rec.bal, nci: nci && { ...nci, v: 0, concept: `${nci.concept} (${nci.v.toFixed(1)} not deducted: the share count includes the exchangeable units it represents)` } } };
+    } else if (sp !== 1 && (ag(f, listed) || ag(f, y))) {
+      rec = { ...rec, shares: { ...fs, v: +f.toFixed(3), concept: `${fs.concept}, x ${+sp.toPrecision(4)} for the share split on ${ys.splitDate} (Yahoo Finance)` } };
+    } else if (ag(fs.v, listed) || ag(fs.v, y) || (!y && listed && fs.v / listed <= 20 && fs.v / listed >= 0.05)) {
+      // agrees with one source (or, with no Yahoo count, within 20x of the listing): keep the filing count
+    } else if (listed) {
+      rec = { ...rec, shares: fromListing(`the filing count of ${fs.v.toFixed(1)}m is ${x(fs.v, listed)} the listing's${y ? (ag(listed, y) ? `, which Yahoo's ${y.toFixed(1)}m confirms` : ` and Yahoo's is ${y.toFixed(1)}m; the listing is used`) : ''}: a scale error in the tag, or a split or share issue since`) };
+    }
   }
   const index = rec.currency === 'CAD' ? '^GSPTSE' : '^GSPC';
   const price = { v: +q.meta.regularMarketPrice.toFixed(4), date: new Date(q.meta.regularMarketTime * 1000).toISOString().slice(0, 10), symbol: sym, exchange: q.meta.fullExchangeName, hi52: q.meta.fiftyTwoWeekHigh, lo52: q.meta.fiftyTwoWeekLow };
