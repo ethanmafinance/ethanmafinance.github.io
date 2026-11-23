@@ -32,4 +32,16 @@ test('blend: weights follow the DCF fit and drop methods without a value', async
   const part = blend('ok', { dcf_g: 100, ev_ebitda: 50, pe: -1 })!;
   assert.ok(Math.abs(part.weights.dcf_g - 0.5) < 1e-9 && Math.abs(part.value - 75) < 1e-9);
   assert.equal(blend('ok', {}), undefined);
+  // bear case on the base weights: a negative DCF counts as zero, so the bear stays below the base
+  const baseV = { dcf_g: 3.47, dcf_x: 57.27, ev_ebitda: 50, pe_f: 78.9 }, bearV = { dcf_g: -6.51, dcf_x: 35.99, ev_ebitda: 43.56, pe_f: 76.28 };
+  const bear = blend('caution', bearV, baseV)!, mid = blend('caution', baseV)!;
+  assert.ok(Math.abs(bear.weights.dcf_g - 0.15) < 1e-9 && Math.abs(bear.value - (0.15 * 35.99 + 0.35 * 43.56 + 0.35 * 76.28)) < 1e-9 && bear.value < mid.value);
+});
+
+test('a deep latest-year operating loss makes the DCF not meaningful', () => {
+  // Hut 8 FY2025 (SEC 10-K): revenue 235.1, operating loss 322.0; FY2024 operating income 460.5
+  const hut = dcfFit({ rev: [96.0, 162.4, 235.1], ebit: [9.4, 460.5, -322.0], capex: [2.5, 163.6, 216.9], fcfForecast: [10, 20, 30], ev: 410, tvShare: 0.49 });
+  assert.equal(hut.verdict, 'no');
+  // a small loss (4% of revenue) after profitable years stays usable with care
+  assert.notEqual(dcfFit({ rev: [100, 110, 120], ebit: [10, 12, -5], capex: [5, 5, 5], fcfForecast: [5, 6, 7], ev: 500, tvShare: 0.7 }).verdict, 'no');
 });

@@ -78,7 +78,7 @@ export function ValuationSummary({ co, a, def, values, res, ccy, onCase, missing
   // Implied share price: the methods weighted by how well each fits, for the bear, base and bull cases
   // (DCF cases; peer 25th, median and 75th percentile multiples).
   const at = (k: number) => Object.fromEntries(bars.filter(b => b.key && !b.off).map(b => [b.key, [b.lo, b.mid, b.hi][k]])) as Partial<Record<Method, number>>;
-  const mixes = [0, 1, 2].map(k => blend(out.fit.verdict, at(k)));
+  const mixes = [0, 1, 2].map(k => blend(out.fit.verdict, at(k), at(1)));
   const mix = mixes[CASES.findIndex(([c]) => c === a.scenario)], mixBase = mixes[1];
   const s = res.scalar;
   const caseName = a.scenario === 'downside' ? 'bear' : a.scenario === 'upside' ? 'bull' : 'base';

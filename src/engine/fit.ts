@@ -9,6 +9,7 @@ export function dcfFit(x: { rev: number[]; ebit: number[]; capex: number[]; fcfF
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   if (!(x.ev > 0)) no.push('The DCF enterprise value is zero or negative: forecast free cash flow does not cover the investment the model assumes.');
   if (x.ebit[n - 1] < 0 && lossYears >= Math.min(2, n)) no.push(`Operating losses in ${lossYears} of the last ${n} reported years, including the latest. A DCF would rest on an assumed turnaround, not on the company's record.`);
+  else if (x.ebit[n - 1] < -0.1 * x.rev[n - 1]) no.push(`The latest year's operating loss was ${pct(-x.ebit[n - 1] / x.rev[n - 1])} of revenue. A DCF would rest on an assumed turnaround, not on the company's record.`);
   if (x.fcfForecast.length && x.fcfForecast.every(f => f < 0)) no.push('Free cash flow is negative in every forecast year, so almost all of the value would sit in the terminal value.');
   const capexShare = x.capex[n - 1] / x.rev[n - 1];
   if (capexShare > 0.5) caution.push(`Heavy build-out: capex was ${pct(capexShare)} of revenue in the latest year, so current cash flow says little about steady-state cash flow.`);
@@ -41,8 +42,10 @@ export const WHY: Record<Fit['verdict'], string> = {
   caution: 'The DCF is usable with care, so it carries 30% and peer EV / EBITDA and P / E 70% (forward P / E when consensus is published). EV / revenue is left out because it ignores margins.',
   no: 'The DCF is not meaningful, so it carries no weight. The price rests on peer multiples, with EV / revenue included because earnings are negative or not yet representative. Forward multiples replace trailing ones when consensus is published.',
 };
-export function blend(verdict: Fit['verdict'], values: Partial<Record<Method, number>>) {
-  const ok = (m: Method) => { const v = values[m]; return v !== undefined && Number.isFinite(v) && v > 0; };
+// The weights come from the base case (basis), so the bear and bull prices use the same mix. A method that is negative
+// in one case counts as zero there: equity cannot be worth less than nothing.
+export function blend(verdict: Fit['verdict'], values: Partial<Record<Method, number>>, basis = values) {
+  const ok = (m: Method) => { const v = basis[m]; return v !== undefined && Number.isFinite(v) && v > 0 && Number.isFinite(values[m]); };
   // Forward multiples (consensus next twelve months) take the place of the trailing ones when they exist: the market prices on them.
   const slot = { ...W[verdict] };
   for (const [t, f] of [['pe', 'pe_f'], ['ev_rev', 'ev_rev_f']] as const) if (ok(f)) { slot[f] = slot[t]; slot[t] = 0; }
@@ -52,5 +55,5 @@ export function blend(verdict: Fit['verdict'], values: Partial<Record<Method, nu
   const sum = Object.values(w).reduce((s, x) => s + x, 0);
   if (!sum) return undefined;
   const weights = Object.fromEntries(Object.entries(w).map(([m, x]) => [m, x / sum])) as Record<Method, number>;
-  return { weights, value: (Object.keys(weights) as Method[]).reduce((s, m) => s + (weights[m] ? weights[m] * values[m]! : 0), 0) };
+  return { weights, value: (Object.keys(weights) as Method[]).reduce((s, m) => s + (weights[m] ? weights[m] * Math.max(0, values[m]!) : 0), 0) };
 }

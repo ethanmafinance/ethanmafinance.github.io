@@ -31,6 +31,15 @@ export const UNIVERSE = [
 // TSX symbols that differ from the US ticker (CAD reporters are priced on the TSX).
 const TSX = { PBA: 'PPL', TU: 'T', CNI: 'CNR' };
 
+// Figures the company tags only with its own (custom) XBRL concepts, which SEC companyfacts leaves out. Typed from the
+// filing's cash flow statement, US$m, used only for years the standard tags leave empty.
+const FILED = {
+  NEE: { capex: { concept: 'NextEra custom tags, 10-K cash flow statement: capital expenditures of FPL + independent power and other investments of NEER + nuclear fuel purchases + other capital expenditures', years: {
+    '2021-12-31': [16077, '0000753308-24-000008', '2024-02-16'], '2022-12-31': [19283, '0000753308-24-000008', '2024-02-16'], // 7,408 + 8,247 + 275 + 147; 9,067 + 9,541 + 223 + 452 (FY2023 10-K)
+    '2023-12-31': [25113, '0000753308-26-000015', '2026-02-13'], '2024-12-31': [24729, '0000753308-26-000015', '2026-02-13'], '2025-12-31': [24606, '0000753308-26-000015', '2026-02-13'], // 9,302 + 15,565 + 185 + 61; 7,992 + 16,215 + 399 + 123; 8,719 + 15,332 + 553 + 2 (FY2025 10-K)
+  } } },
+};
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function get(url, json = true, tries = 3) {
   for (let i = 1; ; i++) {
@@ -45,8 +54,11 @@ async function get(url, json = true, tries = 3) {
 const FLOW = {
   rev: ['Revenues', 'RevenueFromContractWithCustomerExcludingAssessedTax', 'RegulatedAndUnregulatedOperatingRevenue', 'RevenueFromContractWithCustomerIncludingAssessedTax', 'SalesRevenueNet', 'RevenuesNetOfInterestExpense', 'Revenue', 'RevenueFromContractsWithCustomers', 'SalesRevenueGoodsNet', 'SalesRevenueServicesNet'],
   ebit: ['OperatingIncomeLoss', 'ProfitLossFromOperatingActivities'],
-  da: ['DepreciationDepletionAndAmortization', 'DepreciationAndAmortization', 'DepreciationAmortizationAndAccretionNet', 'DepreciationAmortizationAndOther', 'Depreciation', 'DepreciationAndAmortisationExpense', 'DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss'],
-  capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquireProductiveAssets', 'PaymentsForCapitalImprovements', 'PaymentsToAcquireOtherPropertyPlantAndEquipment', 'PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities'],
+  da: ['DepreciationDepletionAndAmortization', 'DepreciationAndAmortization', 'DepreciationAmortizationAndAccretionNet', 'DepreciationAmortizationAndOther', 'Depreciation', 'DepreciationAndAmortisationExpense', 'DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss', 'AdjustmentsForDepreciationAndAmortisationExpense'],
+  // An inner array is summed (Hut 8: property and equipment plus miner deposits, two lines of its cash flow statement).
+  capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquireProductiveAssets', 'PaymentsForCapitalImprovements', 'PaymentsToAcquireOtherPropertyPlantAndEquipment', 'PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities',
+    'PaymentsForProceedsFromProductiveAssets', 'PaymentsToDevelopRealEstateAssets', ['PaymentsToAcquireMachineryAndEquipment', 'PaymentsToAcquireMiningAssets'],
+    'PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets', 'PurchaseOfOtherLongtermAssetsClassifiedAsInvestingActivities'],
   // Amortization of acquired intangibles: non-cash and not replaced by capex, so the forecast uses EBITA.
   amort: ['AmortizationOfIntangibleAssets', 'AmortizationOfAcquiredIntangibleAssets'],
   cfo: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'CashFlowsFromUsedInOperatingActivities'],
@@ -74,7 +86,14 @@ const ANNUAL = /^(10-K|20-F|40-F|6-K)/;
 const days = (a, b) => (Date.parse(b) - Date.parse(a)) / 864e5;
 
 // Annual values by fiscal year end, from the latest filing that reports that year (restatements win).
+// An array of concepts is summed, for the years the first one is tagged.
 function series(facts, concept, cur, instant) {
+  if (Array.isArray(concept)) {
+    const parts = concept.map(c => series(facts, c, cur, instant));
+    if (!parts[0]) return;
+    const byEnd = Object.fromEntries(Object.entries(parts[0].byEnd).map(([e, f]) => [e, { ...f, val: parts.reduce((t, p) => t + (p?.byEnd[e]?.val ?? 0), 0) }]));
+    return { concept: parts.filter(Boolean).map(p => p.concept).join(' + '), byEnd };
+  }
   for (const ns of ['us-gaap', 'ifrs-full']) {
     const units = facts[ns]?.[concept]?.units?.[cur];
     if (!units) continue;
@@ -267,6 +286,8 @@ async function build(ticker, cikOf) {
     });
   }
 
+  for (const [k, { concept, years }] of Object.entries(FILED[ticker] ?? {}))
+    hist[k] = hist[k].map((f, i) => f ?? (years[ends[i]] ? { v: years[ends[i]][0], concept, form: '10-K', filed: years[ends[i]][2], url: link(co.cik_str, years[ends[i]][1]) } : null));
   // EBIT not tagged (e.g. Johnson & Johnson has no operating income line): pre-tax income plus interest expense.
   hist.ebit = hist.ebit.map((f, k) => f ?? (hist.pretax[k] ? { ...hist.pretax[k], v: +(hist.pretax[k].v + (hist.int[k]?.v ?? 0)).toFixed(3), concept: `${hist.pretax[k].concept} + ${hist.int[k]?.concept ?? 'no interest tagged'} (pre-tax income plus interest expense)` } : null));
   const lastEnd = ends.at(-1);
