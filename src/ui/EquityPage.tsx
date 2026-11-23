@@ -4,6 +4,7 @@ import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Model } from '../engine/sheet.ts';
 import { dcf, type Answers, type Company, type Overrides } from '../engine/dcf.ts';
 import { fortisChecks, fortisEquity } from '../modules/fortisEquity.ts';
+import { msftChecks, msftEquity } from '../modules/msftEquity.ts';
 import type { Module } from '../engine/projectFinance.ts';
 import { ChecksCard, fmt, InputsPanel, useDownload } from './ModelPage.tsx';
 import { BarChart, LineChart } from './Charts.tsx';
@@ -173,7 +174,7 @@ const WACC_STEPS = [-0.01, -0.005, 0, 0.005, 0.01];
 const G_STEPS = [-0.01, -0.005, 0, 0.005, 0.01];
 
 // Worked example: frozen company data plus guidance-based assumptions and checks against the filings.
-export const EQUITY_EXAMPLES = [{ ...fortisEquity, checks: fortisChecks }];
+export const EQUITY_EXAMPLES = [{ ...fortisEquity, checks: fortisChecks }, { ...msftEquity, checks: msftChecks }];
 export const equityVerified = (e: (typeof EQUITY_EXAMPLES)[number]) => {
   const m = new Model(dcf(e.company, e.answers, e.overrides).def);
   const res = m.results();

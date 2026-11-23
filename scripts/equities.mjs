@@ -73,7 +73,8 @@ const BAL = {
   cash: ['CashAndCashEquivalentsAtCarryingValue', 'CashAndCashEquivalents', 'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents'],
   // Debt: one total if tagged, otherwise long-term (non-current) plus current portion plus short-term borrowings.
   debt_total: ['LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities', 'DebtLongtermAndShorttermCombinedAmount', 'LongTermDebt', 'Borrowings'],
-  ltd: ['LongTermDebtNoncurrent', 'LongTermDebtAndCapitalLeaseObligations', 'LongTermDebtAndFinanceLeaseObligationsNoncurrent', 'NoncurrentPortionOfNoncurrentBorrowings'],
+  // Last: senior notes plus loans, for filers that tag no long-term debt total (Equinix: notes 16,910 + loans 686 in FY2025).
+  ltd: ['LongTermDebtNoncurrent', 'LongTermDebtAndCapitalLeaseObligations', 'LongTermDebtAndFinanceLeaseObligationsNoncurrent', 'NoncurrentPortionOfNoncurrentBorrowings', ['SeniorLongTermNotes', 'LongTermLoansPayable']],
   ltd_cur: ['LongTermDebtCurrent', 'LongTermDebtAndCapitalLeaseObligationsCurrent', 'CurrentPortionOfLongtermBorrowings'],
   std: ['ShortTermBorrowings', 'CommercialPaper', 'ShorttermBorrowings'],
   nci: ['MinorityInterest', 'NoncontrollingInterestInConsolidatedEntity', 'NoncontrollingInterests'],
@@ -288,6 +289,9 @@ async function build(ticker, cikOf) {
 
   for (const [k, { concept, years }] of Object.entries(FILED[ticker] ?? {}))
     hist[k] = hist[k].map((f, i) => f ?? (years[ends[i]] ? { v: years[ends[i]][0], concept, form: '10-K', filed: years[ends[i]][2], url: link(co.cik_str, years[ends[i]][1]) } : null));
+  // us-gaap:Depreciation covers tangible assets only. Add intangible amortization when tagged separately, so D&A is the full
+  // non-cash charge (Microsoft FY2026: depreciation 34,300 + intangible amortization 4,700, both from its 10-K notes).
+  hist.da = hist.da.map((f, k) => (f && /:Depreciation$/.test(f.concept) && hist.amort[k] ? { ...f, v: +(f.v + hist.amort[k].v).toFixed(3), concept: `${f.concept} + ${hist.amort[k].concept}` } : f));
   // EBIT not tagged (e.g. Johnson & Johnson has no operating income line): pre-tax income plus interest expense.
   hist.ebit = hist.ebit.map((f, k) => f ?? (hist.pretax[k] ? { ...hist.pretax[k], v: +(hist.pretax[k].v + (hist.int[k]?.v ?? 0)).toFixed(3), concept: `${hist.pretax[k].concept} + ${hist.int[k]?.concept ?? 'no interest tagged'} (pre-tax income plus interest expense)` } : null));
   const lastEnd = ends.at(-1);

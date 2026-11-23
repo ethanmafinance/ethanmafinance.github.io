@@ -71,6 +71,13 @@ test('Fortis example: guidance assumptions reproduce the filings and the capital
   assert.ok(res.scalar.ronic_used > res.scalar.wacc, 'new capital earns above WACC');
 });
 
+test('Microsoft example: consensus growth and FY2026 10-K figures reproduce', async () => {
+  const { msftEquity: e, msftChecks } = await import('../src/modules/msftEquity.ts');
+  const res = new Model(dcf(e.company, e.answers, e.overrides).def).results();
+  for (const c of msftChecks) if (!c.info) assert.ok(Math.abs(c.model(res) / c.published - 1) <= (c.tol ?? 0.01), c.label);
+  assert.ok(res.scalar.ev > 0 && res.scalar.ronic_used > res.scalar.wacc);
+});
+
 test('consensus: years 1 and 2 growth as estimated, then a straight fade; NTM forward figures', async () => {
   const { forward } = await import('../src/engine/comps.ts');
   const withCons: Company = { ...co, cons: { date: co.price.date, rows: [{ end: '2026-12-31', g: 0.1, nRev: 5, eps: 4, nEps: 5 }, { end: '2027-12-31', g: 0.06, nRev: 5, eps: 5, nEps: 5 }] } };
