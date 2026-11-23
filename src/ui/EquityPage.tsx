@@ -124,6 +124,18 @@ export function EquityStart({ prefill = '' }: { prefill?: string }) {
         ))}
         <button className="btn primary" disabled={!known}>Build the model</button>
       </form>
+      <div className="card">
+        <h2>How to read the valuation</h2>
+        <ul className="read-list">
+          <li><strong>Implied share price</strong> is a weighted mix of the DCF (perpetuity growth and exit multiple) and peer multiples (EV / EBITDA and P / E, forward when analysts publish estimates).</li>
+          <li><strong>The weights depend on whether a DCF fits.</strong> Steady profits: the DCF carries 50%. Heavy build-out, very fast growth or a terminal value above 85% of the total: 30%. Operating losses or negative cash flow: 0%, and EV / revenue joins the multiples. The page says which case applies and why.</li>
+          <li><strong>Bear, base and bull</strong> move year 1 and 2 growth by 3 points, the target operating margin by 10% and terminal growth by 0.5 points. The multiples use the peers' 25th percentile, median and 75th percentile.</li>
+          <li><strong>Peers</strong> come from a curated group for infrastructure names and the largest companies (utilities, pipelines, integrated oil and gas), otherwise from the SEC industry code, closest in market value.</li>
+          <li><strong>What the price implies</strong> runs the DCF backwards: the year 1 growth the current price needs.</li>
+          <li><strong>Every input shows its source</strong> (SEC filing, analyst consensus, Treasury or Bank of Canada yield). Change any of them and the page and the Excel download follow.</li>
+        </ul>
+        <p className="note">A model built from public data to show the method, not a recommendation.</p>
+      </div>
       {list && (
         <div className="card">
           <h2>Infrastructure and large-cap companies</h2>
