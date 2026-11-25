@@ -147,24 +147,32 @@ export function valuationSheets(m: Model, vx: ValuationExport) {
   set(va, rCase, 3, { v: `=IF(ISNUMBER(C${S(rCase)}),C${S(rCase)}/${I('price')}-1,"n/m")`, f: 'pct', st: 'bold' });
   set(va, rCase, 10, { v: 'upside in column D', st: 'note' });
 
-  // Chart data: one bar per method from the low to the high value (methods with no value, and the DCF when it does not
-  // fit, show no bar), plus a thin bar at the current price.
-  const chartTop = rCase + 2, chartRows = 22, cd = chartTop + chartRows + 1;
-  set(va, cd, 0, { v: 'Football field chart data', st: 'head' }); set(va, cd, 1, { v: 'Bar start', st: 'head' }); set(va, cd, 2, { v: 'Bar length', st: 'head' });
-  const labels = [...methods.map(x => x.label), '52-week trading range', 'Current share price'];
+  // Chart data for the football field (an XY chart, so the price lines share the bars' axis): each method is a thick
+  // horizontal line from its low to its high value at height 1, 2, 3...; a point at x = 0 carries its name. Methods with no
+  // value, and the DCF when it does not fit, get a zero-length line, which draws nothing (no #N/A in the sheet). Then two vertical lines across all rows:
+  // the current price (solid) and the weighted implied price for the case selected on Inputs (dotted).
+  const chartTop = rCase + 2, chartRows = 24, cd = chartTop + chartRows + 1;
+  ['Football field chart data', 'Name at x', 'Low', 'High', 'Height', 'Height', 'Height'].forEach((h, k) => set(va, cd, k, { v: h, st: 'head' }));
+  const labels = [...methods.map(x => x.label), '52-week trading range'];
+  const nb = labels.length;
   labels.forEach((label, k) => {
-    const r = cd + 1 + k, Rr = S(r);
+    const r = cd + 1 + k, src = S(R0 + k);
+    const shown = k < 2 ? `AND(${vi.fit}<>"no",ISNUMBER(B${src}),ISNUMBER(D${src}))` : `AND(ISNUMBER(B${src}),ISNUMBER(D${src}))`;
     set(va, r, 0, { v: label, st: 'label' });
-    if (k === labels.length - 1) {
-      set(va, r, 1, { v: `=${I('price')}*(1-${vi.mark}/2)`, f: 'px' }); set(va, r, 2, { v: `=${I('price')}*${vi.mark}`, f: 'px' });
-      return;
-    }
-    const src = S(R0 + k), shown = k < 2 ? `AND(${vi.fit}<>"no",ISNUMBER(B${src}),ISNUMBER(D${src}))` : `AND(ISNUMBER(B${src}),ISNUMBER(D${src}))`;
-    set(va, r, 1, { v: `=IF(${shown},MAX(0,MIN(B${src},D${src})),0)`, f: 'px' });
-    set(va, r, 2, { v: `=IF(${shown},MAX(0,MAX(B${src},D${src}))-B${Rr},0)`, f: 'px' });
+    set(va, r, 1, { v: 0, f: 'px' });
+    set(va, r, 2, { v: `=IF(${shown},MAX(0,MIN(B${src},D${src})),0)`, f: 'px' });
+    set(va, r, 3, { v: `=IF(${shown},MAX(0,B${src},D${src}),0)`, f: 'px' });
+    for (const c of [4, 5, 6]) set(va, r, c, { v: k + 1, f: 'int' });
   });
-  const chart = { title: `${vx.self.ticker}: implied share price by method (${ccy})`, top: chartTop, rows: chartRows, cats: `Valuation!$A$${S(cd + 1)}:$A$${S(cd + labels.length)}`,
-    start: `Valuation!$B$${S(cd + 1)}:$B$${S(cd + labels.length)}`, len: `Valuation!$C$${S(cd + 1)}:$C$${S(cd + labels.length)}`, first: cd + 1, n: labels.length };
+  const rP = cd + 1 + nb, rI = rP + 1, sel = `$C$${S(rCase)}`;
+  const caseName = `CHOOSE(${I('case_now')}+2,"bear","base","bull")`;
+  set(va, rP, 0, { v: `="Current share price ${ccy}"&TEXT(${I('price')},"0.00")`, st: 'label' });
+  set(va, rI, 0, { v: `=IF(ISNUMBER(${sel}),"Implied share price ${ccy}"&TEXT(${sel},"0.00")&" (weighted, "&${caseName}&" case)","Implied share price n/m")`, st: 'label' });
+  for (const [r, v] of [[rP, `=${I('price')}`], [rI, `=IF(ISNUMBER(${sel}),${sel},0)`]] as const) {
+    set(va, r, 2, { v, f: 'px' }); set(va, r, 3, { v, f: 'px' });
+    set(va, r, 5, { v: 0.3, f: 'num' }); set(va, r, 6, { v: r === rI ? `=IF(ISNUMBER(${sel}),${nb + 0.7},0.3)` : nb + 0.7, f: 'num' });
+  }
+  const chart = { title: `${vx.self.ticker}: implied share price by method (${ccy} per share)`, top: chartTop, rows: chartRows, first: cd + 1, n: nb, price: rP, implied: rI };
 
   const dashOuts = [
     { label: 'Implied share price, weighted DCF and comps (case selected on Inputs)', unit: ccy, sheet: 'Valuation', r: rCase, c: 2, fmt: 'px' as Fmt },

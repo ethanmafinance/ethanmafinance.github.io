@@ -10,7 +10,7 @@ concurrency: { group: pages, cancel-in-progress: true }
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: { name: github-pages, url: '${{ steps.deployment.outputs.page_url }}' }
+    environment: { name: github-pages, url: '${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,5 +29,13 @@ jobs:
       - run: npm run build
       - uses: actions/upload-pages-artifact@v5
         with: { path: dist }
+      # deploy-pages sometimes reports "No artifacts named github-pages were found" a second after a good upload
+      # (failed runs 45273784396, 45279772456, 45703646975): wait a minute and try once more.
       - id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 60
+      - id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5

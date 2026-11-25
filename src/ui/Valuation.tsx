@@ -61,7 +61,7 @@ export function ValuationSummary({ co, a, values, res, ccy, onCase, missing, exp
         )}
       </div>
       <FitBanner fit={out.fit} ticker={co.ticker} />
-      <FootballField bars={bars} price={values.price} ccy={ccy} />
+      <FootballField bars={bars} price={values.price} implied={mix?.value} ccy={ccy} />
       <div className="scroll-x"><table>
         <thead><tr><th>Method ({ccy} per share)</th><th>Bear / low</th><th>Base / mid</th><th>Bull / high</th><th>Weight</th><th style={{ textAlign: 'left' }}>Basis</th></tr></thead>
         <tbody>{bars.map(b => (
@@ -93,9 +93,9 @@ function FitBanner({ fit, ticker }: { fit: ReturnType<typeof dcfFit>; ticker: st
   );
 }
 
-function FootballField({ bars, price, ccy }: { bars: Bar[]; price: number; ccy: string }) {
+function FootballField({ bars, price, implied, ccy }: { bars: Bar[]; price: number; implied?: number; ccy: string }) {
   const live = bars.filter(b => !b.off && [b.lo, b.hi].every(Number.isFinite));
-  const all = [price, ...live.flatMap(b => [b.lo, b.hi])];
+  const all = [price, ...(implied ? [implied] : []), ...live.flatMap(b => [b.lo, b.hi])];
   const max = Math.max(...all) * 1.08, min = Math.max(0, Math.min(...all) * 0.9);
   const W = 900, L = 190, R = 16, rowH = 30, top = 8, Hh = top + bars.length * rowH + 26;
   const x = (v: number) => L + ((Math.max(min, Math.min(max, v)) - min) / (max - min || 1)) * (W - L - R);
@@ -118,8 +118,13 @@ function FootballField({ bars, price, ccy }: { bars: Bar[]; price: number; ccy: 
             </g>
           );
         })}
+        {/* Current price solid, weighted implied price dotted; each label sits on the side away from the other line. */}
         <line x1={x(price)} x2={x(price)} y1={top - 4} y2={Hh - 22} className="ff-price" />
-        <text x={x(price)} y={top + 2} className="ff-price-label" textAnchor={x(price) > W - 80 ? 'end' : 'start'} dx={x(price) > W - 80 ? -4 : 4}>Price {ccy}{fmt(price, 'px')}</text>
+        {implied !== undefined && <line x1={x(implied)} x2={x(implied)} y1={top - 4} y2={Hh - 22} className="ff-imp" />}
+        {([[price, `Price ${ccy}${fmt(price, 'px')}`, 'ff-price-label'], ...(implied !== undefined ? [[implied, `Implied ${ccy}${fmt(implied, 'px')}`, 'ff-imp-label']] : [])] as [number, string, string][]).map(([v, t, c]) => {
+          const other = v === price ? implied : price, right = other === undefined ? x(v) < W - 120 : v >= other;
+          return <text key={c} x={x(v)} y={top + 2} className={c} textAnchor={right ? 'start' : 'end'} dx={right ? 4 : -4}>{t}</text>;
+        })}
       </svg>
     </div>
   );

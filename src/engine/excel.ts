@@ -190,10 +190,11 @@ export async function toXlsx(m: Model, vx?: ValuationExport): Promise<ArrayBuffe
   }
 }
 
-// Football field: a stacked horizontal bar chart (an invisible bar from zero to the low value, then a navy bar from low to
-// high), written into the file's XML because ExcelJS writes no charts. The series point at the chart data on the Valuation
-// tab, so Excel redraws it when an input changes.
-type ChartSpec = { title: string; top: number; rows: number; cats: string; start: string; len: string; first: number; n: number };
+// Football field: an XY chart written into the file's XML, because ExcelJS writes no charts. Each method is a thick
+// horizontal line from its low to its high value, named by a label point at x = 0; the current price is a solid vertical
+// line and the weighted implied price a dotted one, so all share one price axis. Every series points at the chart data on
+// the Valuation tab, so Excel redraws it when an input changes.
+type ChartSpec = { title: string; top: number; rows: number; first: number; n: number; price: number; implied: number };
 async function addChart(buf: ArrayBuffer, sheetId: number, ch: ChartSpec, values: unknown[][]) {
   const JSZip = (await import('jszip')).default;
   const zip = await JSZip.loadAsync(buf, { createFolders: false });
@@ -201,24 +202,44 @@ async function addChart(buf: ArrayBuffer, sheetId: number, ch: ChartSpec, values
   const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
   const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
   const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const pts = (col: number, num: boolean) => Array.from({ length: ch.n }, (_, k) => {
-    const v = values[ch.first + k]?.[col];
-    return `<c:pt idx="${k}"><c:v>${num ? (typeof v === 'number' ? v : 0) : esc(String(v ?? ''))}</c:v></c:pt>`;
-  }).join('');
-  const cat = `<c:cat><c:strRef><c:f>${ch.cats}</c:f><c:strCache><c:ptCount val="${ch.n}"/>${pts(0, false)}</c:strCache></c:strRef></c:cat>`;
-  const ser = (idx: number, name: string, ref: string, col: number, fill: string) =>
-    `<c:ser><c:idx val="${idx}"/><c:order val="${idx}"/><c:tx><c:v>${name}</c:v></c:tx><c:spPr>${fill}</c:spPr><c:invertIfNegative val="0"/>${cat}<c:val><c:numRef><c:f>${ref}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${ch.n}"/>${pts(col, true)}</c:numCache></c:numRef></c:val></c:ser>`;
-  const txt = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900"><a:solidFill><a:srgbClr val="404040"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>';
+  const ref = (r: number, c0: number, c1 = c0) => `Valuation!$${colLetter(c0)}$${r + 1}${c1 > c0 ? `:$${colLetter(c1)}$${r + 1}` : ''}`;
+  // Cached copies of the cells (Excel shows them until it recalculates).
+  const num = (r: number, c0: number, c1: number) => {
+    const pts = Array.from({ length: c1 - c0 + 1 }, (_, k) => values[r]?.[c0 + k]).map((v, k) => (typeof v === 'number' ? `<c:pt idx="${k}"><c:v>${v}</c:v></c:pt>` : '')).join('');
+    return `<c:numRef><c:f>${ref(r, c0, c1)}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${c1 - c0 + 1}"/>${pts}</c:numCache></c:numRef>`;
+  };
+  const name = (r: number) => `<c:tx><c:strRef><c:f>${ref(r, 0)}</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${esc(String(values[r]?.[0] ?? ''))}</c:v></c:pt></c:strCache></c:strRef></c:tx>`;
+  const txt = (sz: number, color = '404040', b = 0) => `<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${sz}" b="${b}"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>`;
+  const flags = (ser: 0 | 1) => `<c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="${ser}"/><c:showPercent val="0"/><c:showBubbleSize val="0"/>`;
+  const noMarker = '<c:marker><c:symbol val="none"/></c:marker>';
+  const ln = (w: number, color: string, extra = '') => `<c:spPr><a:ln w="${w}" cap="flat"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${extra}</a:ln></c:spPr>`;
+  let idx = 0;
+  const ser = (body: string) => `<c:ser><c:idx val="${idx}"/><c:order val="${idx++}"/>${body}<c:smooth val="0"/></c:ser>`;
+  const series: string[] = [];
+  for (let k = 0; k < ch.n; k++) {
+    const r = ch.first + k, color = k < 2 ? '1F3C6E' : k === ch.n - 1 ? '9AA5B5' : '5B84C4';
+    // the bar: low to high at height k + 1
+    series.push(ser(`${name(r)}${ln(177800, color)}${noMarker}<c:xVal>${num(r, 2, 3)}</c:xVal><c:yVal>${num(r, 5, 6)}</c:yVal>`));
+    // its name, as a label left of a point at x = 0 (one point, so no line is drawn)
+    series.push(ser(`${name(r)}<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>${noMarker}<c:dLbls>${txt(900)}<c:dLblPos val="l"/>${flags(1)}</c:dLbls><c:xVal>${num(r, 1, 1)}</c:xVal><c:yVal>${num(r, 4, 4)}</c:yVal>`));
+  }
+  const first = idx;
+  series.push(ser(`${name(ch.price)}${ln(28575, 'A8354F')}${noMarker}<c:xVal>${num(ch.price, 2, 3)}</c:xVal><c:yVal>${num(ch.price, 5, 6)}</c:yVal>`));
+  series.push(ser(`${name(ch.implied)}${ln(28575, '1F3C6E', '<a:prstDash val="sysDot"/>').replace('cap="flat"', 'cap="rnd"')}${noMarker}<c:xVal>${num(ch.implied, 2, 3)}</c:xVal><c:yVal>${num(ch.implied, 5, 6)}</c:yVal>`));
+  // Legend: only the two price lines (the bars are named on the chart).
+  const legend = '<c:legend><c:legendPos val="t"/>' + Array.from({ length: first }, (_, k) => `<c:legendEntry><c:idx val="${k}"/><c:delete val="1"/></c:legendEntry>`).join('') + `<c:overlay val="0"/>${txt(900)}</c:legend>`;
   const chartXml = HEAD + `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${REL}">`
     + '<c:roundedCorners val="0"/><c:chart>'
     + `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1200" b="1"/></a:pPr><a:r><a:rPr lang="en-US" sz="1200" b="1"/><a:t>${esc(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>`
-    + '<c:autoTitleDeleted val="0"/><c:plotArea><c:layout/>'
-    + '<c:barChart><c:barDir val="bar"/><c:grouping val="stacked"/><c:varyColors val="0"/>'
-    + ser(0, 'Start', ch.start, 1, '<a:noFill/><a:ln><a:noFill/></a:ln>') + ser(1, 'Range', ch.len, 2, '<a:solidFill><a:srgbClr val="1F3C6E"/></a:solidFill>')
-    + '<c:gapWidth val="60"/><c:overlap val="100"/><c:axId val="50010"/><c:axId val="50020"/></c:barChart>'
-    + `<c:catAx><c:axId val="50010"/><c:scaling><c:orientation val="maxMin"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:numFmt formatCode="General" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="low"/>${txt}<c:crossAx val="50020"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`
-    + `<c:valAx><c:axId val="50020"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorGridlines><c:spPr><a:ln w="6350"><a:solidFill><a:srgbClr val="D9D9D9"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:numFmt formatCode="#,##0" sourceLinked="0"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${txt}<c:crossAx val="50010"/><c:crosses val="max"/><c:crossBetween val="between"/></c:valAx>`
-    + '</c:plotArea><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>'
+    + '<c:autoTitleDeleted val="0"/><c:plotArea>'
+    // room on the left for the method names
+    + '<c:layout><c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.25"/><c:y val="0.16"/><c:w val="0.72"/><c:h val="0.72"/></c:manualLayout></c:layout>'
+    + `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>${series.join('')}<c:axId val="50010"/><c:axId val="50020"/></c:scatterChart>`
+    // price axis from zero (bars are floored at zero), across the bottom
+    + `<c:valAx><c:axId val="50010"/><c:scaling><c:orientation val="minMax"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorGridlines><c:spPr><a:ln w="6350"><a:solidFill><a:srgbClr val="D9D9D9"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:numFmt formatCode="#,##0" sourceLinked="0"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${txt(900)}<c:crossAx val="50020"/><c:crosses val="max"/><c:crossBetween val="midCat"/></c:valAx>`
+    // row axis, hidden: row 1 at the top
+    + `<c:valAx><c:axId val="50020"/><c:scaling><c:orientation val="maxMin"/><c:max val="${ch.n + 1}"/><c:min val="0"/></c:scaling><c:delete val="1"/><c:axPos val="l"/><c:numFmt formatCode="General" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="none"/><c:crossAx val="50010"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
+    + `</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>`
     + '<c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>';
   const drawingXml = HEAD + '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
     + `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${ch.top}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${ch.top + ch.rows}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>`
