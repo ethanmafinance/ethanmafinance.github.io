@@ -23,6 +23,9 @@ export type Company = {
   cons?: { date: string; source?: string; url?: string; note?: string; revNote?: string;
     rows?: { end: string; g?: number; nRev?: number; eps?: number; nEps?: number }[] };
   rf: { value: number; date: string; title: string; url: string };
+  // Damodaran's monthly implied ERP as read by the data script; the constant below when the file predates it.
+  erp?: { value: number; date: string; title: string; url: string };
+  industry?: { name: string; sector: string; source: string; url: string };
   generated: string;
 };
 export type Answers = { years: number; scenario: 'base' | 'downside' | 'upside'; wacc: 'capm' | 'direct'; terminal: 'growth' | 'multiple' };
@@ -33,7 +36,9 @@ const STATUTORY = { USD: 0.21, CAD: 0.265 };
 // Bear / base / bull: year 1 growth (pt), target EBIT margin (x), terminal growth (pt).
 export const SCENARIO = { base: [0, 1, 0], downside: [-0.03, 0.9, -0.005], upside: [0.03, 1.1, 0.005] } as const;
 
-const ERP: Source = { title: 'Damodaran, implied equity risk premium (FCFE) for the S&P 500, start of 2026', date: 'Jan 7, 2026', url: 'https://pages.stern.nyu.edu/~adamodar/pc/datasets/histimpl.xls' };
+// Checked 2026-11-25 on Damodaran's home page: "Implied ERP on November 1, 2026 = 4.41% (Trailing 12 month, with adjusted payout)".
+// He applies the same mature-market premium to Canada (no country risk premium).
+export const ERP_KNOWN = { value: 0.0441, date: '2026-11-01', title: 'Damodaran, implied equity risk premium for the S&P 500 (trailing 12 months, adjusted payout), November 1, 2026', url: 'https://pages.stern.nyu.edu/~adamodar/New_Home_Page/home.htm' };
 const FOMC: Source = { title: 'Federal Reserve, Summary of Economic Projections, September 16, 2026: longer-run median real GDP growth 2.0%, PCE inflation 2.0%', date: 'Sep 16, 2026', url: 'https://www.federalreserve.gov/monetarypolicy/fomcprojtabl20260916.htm' };
 // Terminal growth: below long-run nominal GDP growth (about 4%) because no company outgrows the economy forever, and below the 10-year yield (Damodaran's cap).
 export const G_TERM = 0.03;
@@ -186,7 +191,7 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
           : { id: 'beta', label: 'Equity beta (adjusted)', unit: 'x', value: +(0.67 * c.beta.value + 0.33).toFixed(3), fmt: 'x' as const,
               source: est(`Blume adjustment 0.67 x raw + 0.33 (betas drift toward 1; the convention behind Bloomberg's adjusted beta). ${ownPrecise ? `The company's own regression is precise (standard error ${c.beta.se!.toFixed(2)}), so it is used${bu ? ` rather than the peer beta of ${(0.67 * bu.value + 0.33).toFixed(2)} adjusted` : ''}` : 'Fewer than 5 peers for a bottom-up beta'}. Raw beta ${raw}`) };
       })(),
-      { id: 'erp', label: 'Equity risk premium', unit: '%', value: 0.0423, fmt: 'pct', source: ERP },
+      (() => { const e = c.erp ?? ERP_KNOWN; return { id: 'erp', label: 'Equity risk premium', unit: '%', value: e.value, fmt: 'pct' as const, source: { title: e.title, date: e.date, url: e.url, note: 'monthly implied premium; the same mature-market premium is used for Canadian companies (Damodaran gives Canada no country risk premium)' } }; })(),
       { id: 'kd', label: 'Pre-tax cost of debt', unit: '%', value: +kd.toFixed(4), fmt: 'pct',
         source: int && debt.v > 0 ? est(`FY${fy[H - 1]} interest (${int.concept.split(':')[1]}) / year-end debt, held between the risk-free rate and 5pt above it`) : est('risk-free rate plus 1.5pt: interest expense is not tagged') },
     ]),
@@ -203,6 +208,13 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
       { id: 'tv_mode', label: 'Terminal method (0 = perpetuity growth, 1 = exit multiple)', unit: 'flag', value: a.terminal === 'multiple' ? 1 : 0, fmt: 'flag', min: 0, max: 1, step: 1, source: est('chosen when the model was built') },
       { id: 'exit_mult', label: 'Exit EV / EBITDA multiple', unit: 'x', value: +(evNow / ebitda).toFixed(2), fmt: 'x',
         source: est(`today's trading multiple: enterprise value at the current price / FY${fy[H - 1]} EBITDA`) },
+    ]),
+    ...g('Bear and bull cases', [
+      { id: 'case_now', label: 'Case in the inputs above (-1 = bear, 0 = base, 1 = bull)', unit: 'case', value: a.scenario === 'downside' ? -1 : a.scenario === 'upside' ? 1 : 0, fmt: 'int', min: -1, max: 1, step: 1,
+        source: est('chosen when the model was built; the case blocks at the bottom of the Model tab undo it to get the base case, then apply the shifts below') },
+      { id: 'sh_g', label: 'Bear / bull shift: revenue growth, forecast years 1 and 2', unit: 'pt', value: SCENARIO.upside[0], fmt: 'pct', source: est('illustrative: 3pt either way') },
+      { id: 'sh_m', label: 'Bear / bull shift: target EBIT margin, share of its size', unit: '%', value: +(SCENARIO.upside[1] - 1).toFixed(4), fmt: 'pct', source: est('illustrative: 10% of the margin either way') },
+      { id: 'sh_gt', label: 'Bear / bull shift: terminal growth', unit: 'pt', value: SCENARIO.upside[2], fmt: 'pct', source: est('illustrative: 0.5pt either way') },
     ]),
   ];
 
@@ -271,6 +283,34 @@ export function dcf(c: Company, a: Answers, over: Overrides = {}): { def: ModelD
     row('dfac', 'Discount factor', 'x', 'num', x => `IF(${x.r('fc')}=0,0,1/(1+${wacc(x)})^${x.r('period')})`),
     row('pv_fcf', 'Present value of free cash flow', cur, 'num', x => `${x.r('fcf_used')}*${x.r('dfac')}`),
   ];
+  // Bear, base and bull cases, all live: the forecast rows again with the case's growth, margin and terminal growth, so the
+  // football field (perpetuity and exit-multiple DCF for each case) needs no second model. The formulas are the rows
+  // above, read through a map that points case-varied inputs at the case cells and rows at the case's own rows.
+  const CASE_ROWS = new Set(['growth', 'rev', 'margin', 'ebit', 'da', 'ebitda', 'nopat', 'reinv_rate', 'capex', 'fcf', 'fcf_used', 'pv_fcf', 'stub_fcf', 'nopat_n1', 'tv_growth']);
+  const CASE_IN: Record<string, string> = { g1: 'g1', g2: 'g2', g_term: 'gt', m_target: 'mt' };
+  const caseItems: Item[] = [
+    { section: 'Bear, base and bull cases (the rows above with each case\'s inputs; they feed the Valuation tab)' },
+    sc('tv_df', 'Discount factor for the terminal value', 'x', 'num', x => `1/(1+${wacc(x)})^(${x.i('years')}-${x.i('stub')})`),
+    sc('claims', 'Debt - cash + non-controlling interests + preferred', cur, 'num', x => `${x.i('debt')}-${x.i('cash')}+${x.i('nci')}+${x.i('pref')}`),
+  ];
+  for (const [k, sfx, name] of [[-1, '_bear', 'bear'], [0, '_base', 'base'], [1, '_bull', 'bull']] as const) {
+    const at = (id: string) => (CASE_ROWS.has(id) ? id + sfx : id);
+    const wrap = (x: any) => ({ ...x, i: (id: string) => (CASE_IN[id] ? x.s(CASE_IN[id] + sfx) : x.i(id)), r: (id: string) => x.r(at(id)), p: (id: string) => x.p(at(id)), n: (id: string) => x.n(at(id)), row: (id: string) => x.row(at(id)), s: (id: string) => x.s(at(id)) });
+    const shift = (x: any, sh: string) => `(${k}-${x.i('case_now')})*${x.i(sh)}`;
+    const mBase = (x: any) => `${x.i('m_target')}/(1+${x.i('case_now')}*${x.i('sh_m')}*SIGN(${x.i('m_target')}))`;
+    caseItems.push(
+      sc('g1' + sfx, `Revenue growth, forecast year 1 (${name})`, '%', 'pct', x => `${x.i('g1')}+${shift(x, 'sh_g')}`),
+      sc('g2' + sfx, `Revenue growth, forecast year 2 (${name})`, '%', 'pct', x => `${x.i('g2')}+${shift(x, 'sh_g')}`),
+      sc('mt' + sfx, `EBIT margin, last forecast year (${name})`, '%', 'pct', x => `${mBase(x)}+${k}*${x.i('sh_m')}*ABS(${mBase(x)})`),
+      sc('gt' + sfx, `Terminal growth (${name})`, '%', 'pct', x => `${x.i('g_term')}+${shift(x, 'sh_gt')}`),
+      ...items.filter((it): it is Extract<Item, { kind: string }> => 'kind' in it && CASE_ROWS.has(it.id))
+        .map(it => ({ ...it, id: it.id + sfx, label: `${it.label} (${name})`, bold: false, f: (x: any) => it.f(wrap(x)) }) as Item),
+      sc('eq_pre_tv' + sfx, `Equity value before the terminal value: PV of free cash flow + cash flow since year end - claims (${name})`, cur, 'num', x => `SUM(${x.row('pv_fcf' + sfx)})+${x.s('stub_fcf' + sfx)}-${x.s('claims')}`),
+      sc('ebitda_n' + sfx, `EBITDA, last forecast year (${name})`, cur, 'num', x => `INDEX(${x.row('ebitda' + sfx)},1,${x.i('years')}+${H_})`),
+      sc('ps_g' + sfx, `DCF implied share price, perpetuity growth (${name})`, c.currency === 'CAD' ? 'C$' : 'US$', 'px', x => `(${x.s('eq_pre_tv' + sfx)}+${x.s('tv_growth' + sfx)}*${x.s('tv_df')})/${x.i('shares')}`, { bold: true }),
+    );
+  }
+  items.push(...caseItems);
   const eq = (f: string | number) => (typeof f === 'number' ? f : '=' + f);
   return {
     def: {

@@ -1,6 +1,6 @@
 // Equities: enter a ticker, answer four questions, and the DCF builds itself from the company's SEC filings.
 // Data files come from scripts/equities.mjs (public/data/eq). Every assumption stays editable here and in Excel.
-import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState, useRef } from 'react';
 import { Model } from '../engine/sheet.ts';
 import { dcf, type Answers, type Company, type Overrides } from '../engine/dcf.ts';
 import { fortisChecks, fortisEquity } from '../modules/fortisEquity.ts';
@@ -12,6 +12,7 @@ import { Calibration, MemoCard, Rows } from './Memo.tsx';
 import { CasesPanel } from './Cases.tsx';
 import { SaveButton } from './Saved.tsx';
 import { ValuationSummary } from './Valuation.tsx';
+import type { ValuationExport } from '../engine/excel.ts';
 
 type V = Record<string, number>;
 export type Listing = { ticker: string; name: string; currency: string; f?: number };
@@ -131,7 +132,7 @@ export function EquityStart({ prefill = '' }: { prefill?: string }) {
           <li><strong>Implied share price</strong> is a weighted mix of the DCF (perpetuity growth and exit multiple) and peer multiples (EV / EBITDA and P / E, forward when analysts publish estimates).</li>
           <li><strong>The weights depend on whether a DCF fits.</strong> Steady profits: the DCF carries 50%. Heavy build-out, very fast growth or a terminal value above 85% of the total: 30%. Operating losses or negative cash flow: 0%, and EV / revenue joins the multiples. The page says which case applies and why.</li>
           <li><strong>Bear, base and bull</strong> move year 1 and 2 growth by 3 points, the target operating margin by 10% and terminal growth by 0.5 points. The multiples use the peers' 25th percentile, median and 75th percentile.</li>
-          <li><strong>Peers</strong> come from a curated group for infrastructure names and the largest companies (utilities, pipelines, integrated oil and gas), otherwise from the SEC industry code, closest in market value.</li>
+          <li><strong>Peers</strong> come from a curated sector group (46 groups, 302 companies), otherwise the 10 companies in the same Yahoo Finance industry closest in market value and EBITDA margin. With fewer than 3 such companies the page shows no comps rather than unrelated ones.</li>
           <li><strong>What the price implies</strong> runs the DCF backwards: the year 1 growth the current price needs.</li>
           <li><strong>Every input shows its source</strong> (SEC filing, analyst consensus, Treasury or Bank of Canada yield). Change any of them and the page and the Excel download follow.</li>
         </ul>
@@ -193,7 +194,8 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
   const [values, setValues] = useState<V>(defaults);
   const model = useMemo(() => new Model(def, defaults), [def, defaults]);
   const res = useMemo(() => { model.set(values); return model.results(); }, [model, values]);
-  const [busy, download] = useDownload(model, `${co.ticker} DCF`);
+  const vx = useRef<ValuationExport | undefined>(undefined);
+  const [busy, download] = useDownload(model, `${co.ticker} DCF`, () => vx.current);
   const scratch = useMemo(() => new Model(def, defaults), [def, defaults]);
   const deferred = useDeferredValue(values);
 
@@ -234,7 +236,7 @@ function EquityView({ co, a, over, checks, title, start }: { co: Company; a: Ans
           <span className="head-actions"><SaveButton item={{ kind: 'equity', ticker: co.ticker, a, name: title ?? `${co.ticker} DCF`, values, headline: `DCF ${ccy}${fmt(res.scalar.per_share, 'px')} per share` }} /><button className="btn primary" onClick={download} disabled={busy}>{busy ? 'Building file...' : 'Download Excel model (live formulas)'}</button></span>
         </div>
 
-        <ValuationSummary missing={missing.length && !def.inputs.some(i => i.group === 'Reported financials' && values[i.id] !== defaults[i.id]) ? missing : undefined} co={co} a={a} def={def} values={deferred} res={res} ccy={ccy} onCase={title ? undefined : c => { location.hash = hrefOf(co.ticker, { ...a, scenario: c }); }} />
+        <ValuationSummary missing={missing.length && !def.inputs.some(i => i.group === 'Reported financials' && values[i.id] !== defaults[i.id]) ? missing : undefined} co={co} a={a} def={def} values={deferred} res={res} ccy={ccy} exportRef={vx} onCase={title ? undefined : c => { location.hash = hrefOf(co.ticker, { ...a, scenario: c }); }} />
 
         {missing.length > 0 && (
           <p className="card warn">Not tagged in this company's XBRL data: {missing.join(', ')}. Those years show 0 and the defaults that depend on them are placeholders. Enter the reported figures from the annual report under Reported financials before relying on the value.</p>

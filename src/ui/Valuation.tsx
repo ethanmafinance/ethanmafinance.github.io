@@ -1,10 +1,12 @@
 // Valuation summary for an equity: bear / base / bull toggle, a DCF fit test, a football field across methods
 // (DCF on perpetuity growth and on an exit multiple, trading comparables on three multiples, 52-week range) and the peer table.
-import { useEffect, useMemo, useState } from 'react';
-import { Model, type ModelDef } from '../engine/sheet.ts';
-import { SCENARIO, shiftMargin, type Answers, type Company } from '../engine/dcf.ts';
-import { blend, dcfFit, quantile, WHY, type Method } from '../engine/fit.ts';
-import { forward, multiples, pickPeers, rowsOf, type Row } from '../engine/comps.ts';
+import { useEffect, useMemo, useState, type MutableRefObject } from 'react';
+import type { ModelDef, Results } from '../engine/sheet.ts';
+import type { Answers, Company } from '../engine/dcf.ts';
+import { dcfFit, quantile, W, WHY } from '../engine/fit.ts';
+import { multiples, pickPeers, rowsOf, type Row } from '../engine/comps.ts';
+import { selfRow, valuation, type Bar } from '../engine/valuation.ts';
+import type { ValuationExport } from '../engine/excel.ts';
 import { fmt } from './ModelPage.tsx';
 import { DATA } from './EquityPage.tsx';
 
@@ -15,70 +17,21 @@ const CASES: [Case, string][] = [['downside', 'Bear'], ['base', 'Base'], ['upsid
 let compsCache: Promise<Row[]> | undefined;
 const loadComps = () => (compsCache ??= fetch(DATA + 'comps.json').then(r => (r.ok ? r.json() : { fields: [], rows: [] })).then(rowsOf, () => []));
 
-type Bar = { label: string; lo: number; mid: number; hi: number; basis: string; off?: string; key?: Method };
-
-export function ValuationSummary({ co, a, def, values, res, ccy, onCase, missing }: {
-  co: Company; a: Answers; def: ModelDef; values: V; res: { scalar: V; row: Record<string, number[]> }; ccy: string; onCase?: (c: Case) => void; missing?: string[];
+export function ValuationSummary({ co, a, values, res, ccy, onCase, missing, exportRef }: {
+  co: Company; a: Answers; def?: ModelDef; values: V; res: { scalar: V; row: Record<string, number[]> }; ccy: string; onCase?: (c: Case) => void; missing?: string[];
+  exportRef?: MutableRefObject<ValuationExport | undefined>;
 }) {
   const [rows, setRows] = useState<Row[]>();
   useEffect(() => { loadComps().then(setRows); }, []);
 
-  // The subject on the same basis as the comps file, using the inputs as edited on the page.
-  const H = def.inputs.filter(i => /^rev_h\d+$/.test(i.id)).length;
-  const hv = (id: string) => Array.from({ length: H }, (_, k) => values[`${id}_h${k + 1}`]);
-  const rev = hv('rev'), ebit = hv('ebit'), da = hv('da'), capex = hv('capex');
-  const ni = co.hist.ni.at(-1)?.v;
-  const mcap = values.price * values.shares;
-  const claims = values.debt - values.cash + values.nci + values.pref;
-  const fwd = forward(co, rev[H - 1], values.shares);
-  const self: Row = { ticker: co.ticker, sic: co.sic ?? '', currency: co.currency, mcap, ev: mcap + claims, rev: rev[H - 1], ebitda: ebit[H - 1] + da[H - 1], ni: ni ?? null, fy: co.fyEnds.at(-1)!, rev_f: fwd.rev_f, ni_f: fwd.ni_f };
-  const perShareFromEv = (ev: number) => (ev - claims) / values.shares;
-
-  const peers = useMemo(() => (rows ? pickPeers(self, rows) : undefined), [rows, co.ticker, co.sic]); // eslint-disable-line react-hooks/exhaustive-deps
-  const pm = (peers?.peers ?? []).map(multiples);
-  const q = (k: 'evEbitda' | 'evRev' | 'pe' | 'peF' | 'evRevF') => { const xs = pm.map(m => m[k]); const n = xs.filter(x => x !== undefined).length; return n >= 3 ? [quantile(xs, 0.25)!, quantile(xs, 0.5)!, quantile(xs, 0.75)!] as const : undefined; };
-  const qEbitda = q('evEbitda'), qRev = q('evRev'), qPe = q('pe'), qPeF = q('peF'), qRevF = q('evRevF');
-
-  const out = useMemo(() => {
-    const m = new Model(def, values);
-    const cur = SCENARIO[a.scenario];
-    const caseVals = (s: Case): V => { const c = SCENARIO[s]; return { ...values, g1: values.g1 + c[0] - cur[0], g2: values.g2 + c[0] - cur[0], m_target: shiftMargin(values.m_target / (1 + (cur[1] - 1) * Math.sign(values.m_target)), c[1]), g_term: values.g_term + c[2] - cur[2] }; };
-    const run = (v: V) => { m.set(v); return m.results(); };
-    const perp = CASES.map(([s]) => run({ ...caseVals(s), tv_mode: 0 }).scalar.per_share);
-    const exitM = qEbitda ?? ([0.8, 1, 1.2].map(f => values.exit_mult * f) as unknown as readonly [number, number, number]);
-    const exit = CASES.map(([s], k) => run({ ...caseVals(s), tv_mode: 1, exit_mult: exitM[k] }).scalar.per_share);
-    const base = run({ ...caseVals('base') });
-    m.hf.destroy();
-    const fcfForecast = base.row.fcf.filter((_, k) => base.row.fc[k] === 1);
-    const fit = dcfFit({ rev, ebit, capex, fcfForecast, ev: res.scalar.ev, tvShare: res.scalar.tv_share, missing });
-    return { perp, exit, exitM, fit };
-  }, [def, values, a.scenario, missing?.length, qEbitda?.[0], qEbitda?.[1], qEbitda?.[2]]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const dcfOff = out.fit.verdict === 'no' ? 'not meaningful' : undefined;
-  const bars: Bar[] = [
-    { key: 'dcf_g', label: 'DCF, perpetuity growth', lo: out.perp[0], mid: out.perp[1], hi: out.perp[2], basis: 'Bear, base and bull cases', off: dcfOff },
-    // The exit-multiple DCF counts in the implied price only on peer multiples: the company's own multiple would just restate its price.
-    { key: qEbitda ? 'dcf_x' : undefined, label: 'DCF, exit multiple', lo: out.exit[0], mid: out.exit[1], hi: out.exit[2], basis: !qEbitda && !(values.exit_mult > 0) ? 'No exit multiple: fewer than 3 peers with a meaningful EV / EBITDA and the current multiple is negative' : `Exit EV / EBITDA ${out.exitM.map(x => fmt(x, 'x')).join(', ')} (${qEbitda ? 'peer 25th, median, 75th' : 'current multiple -20%, 0, +20%'}) with the bear, base and bull cases`, off: dcfOff ?? (qEbitda || values.exit_mult > 0 ? undefined : 'no exit multiple') },
-  ];
-  const compBar = (key: Method, label: string, qs: readonly [number, number, number] | undefined, metric: number | null, toShare: (x: number) => number, what: string) => {
-    if (!qs) return bars.push({ label, lo: NaN, mid: NaN, hi: NaN, basis: 'fewer than 3 peers with a meaningful multiple', off: 'no peers' });
-    if (!(metric && metric > 0)) return bars.push({ label, lo: NaN, mid: NaN, hi: NaN, basis: `${co.ticker}'s ${what} is negative`, off: 'not meaningful' });
-    bars.push({ key, label, lo: toShare(qs[0] * metric), mid: toShare(qs[1] * metric), hi: toShare(qs[2] * metric), basis: `Peer 25th to 75th percentile ${fmt(qs[0], 'x')} to ${fmt(qs[2], 'x')}, median ${fmt(qs[1], 'x')}, on ${what}` });
-  };
-  // Forward multiples only when the company has consensus for both years (the peers' own count is checked in q).
-  const fwdBar = (key: Method, label: string, qs: typeof qPeF, metric: number | null | undefined, toShare: (x: number) => number, what: string) =>
-    metric == null ? bars.push({ label, lo: NaN, mid: NaN, hi: NaN, basis: `no analyst consensus for ${co.ticker}'s next two fiscal years`, off: 'no consensus' }) : compBar(key, label, qs, metric, toShare, what);
-  compBar('ev_ebitda', 'Comps, EV / EBITDA', qEbitda, self.ebitda, perShareFromEv, 'last-year EBITDA');
-  fwdBar('pe_f', 'Comps, forward P / E', qPeF, self.ni_f, x => x / values.shares, 'next twelve months consensus EPS x shares');
-  compBar('pe', 'Comps, P / E', qPe, self.ni, x => x / values.shares, 'last-year net income');
-  fwdBar('ev_rev_f', 'Comps, forward EV / revenue', qRevF, self.rev_f, perShareFromEv, 'next twelve months consensus revenue');
-  compBar('ev_rev', 'Comps, EV / revenue', qRev, self.rev, perShareFromEv, 'last-year revenue');
-  if (co.price.lo52 && co.price.hi52) bars.push({ label: '52-week trading range', lo: co.price.lo52, mid: co.price.v, hi: co.price.hi52, basis: `52-week low and high, Yahoo Finance (${co.price.symbol}); mid line is the latest close` });
-
-  // Implied share price: the methods weighted by how well each fits, for the bear, base and bull cases
-  // (DCF cases; peer 25th, median and 75th percentile multiples).
-  const at = (k: number) => Object.fromEntries(bars.filter(b => b.key && !b.off).map(b => [b.key, [b.lo, b.mid, b.hi][k]])) as Partial<Record<Method, number>>;
-  const mixes = [0, 1, 2].map(k => blend(out.fit.verdict, at(k), at(1)));
+  const self = selfRow(co, values);
+  const peers = useMemo(() => (rows ? pickPeers(self, rows) : undefined), [rows, co.ticker, co.sic, co.industry?.name]); // eslint-disable-line react-hooks/exhaustive-deps
+  const v = useMemo(() => valuation({ co, values, res: res as Results, peers: peers?.peers ?? [], missing }), [co, values, res, peers, missing?.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { bars, mixes, fit } = v;
+  const out = { fit };
+  const dcfOff = fit.verdict === 'no' ? 'not meaningful' : undefined;
+  // What the Excel export needs to rebuild the comps and the football field with live formulas.
+  if (exportRef) exportRef.current = peers ? { peers: peers.peers, basis: peers.basis, self: v.self, fit, weights: W[fit.verdict], why: WHY[fit.verdict], lo52: co.price.lo52, hi52: co.price.hi52, consDate: co.cons?.date } : undefined;
   const mix = mixes[CASES.findIndex(([c]) => c === a.scenario)], mixBase = mixes[1];
   const s = res.scalar;
   const caseName = a.scenario === 'downside' ? 'bear' : a.scenario === 'upside' ? 'bull' : 'base';

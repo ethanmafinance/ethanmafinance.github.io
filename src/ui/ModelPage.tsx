@@ -1,4 +1,5 @@
 import { SaveButton } from './Saved.tsx';
+import type { ValuationExport } from '../engine/excel.ts';
 import { MemoCard, pfMemo } from './Memo.tsx';
 import { CasesPanel, type Metric } from './Cases.tsx';
 import { useDeferredValue, useMemo, useState } from 'react';
@@ -292,13 +293,13 @@ export function ChecksCard({ mod, res }: { mod: Module; res: Results }) {
   );
 }
 
-export function useDownload(model: Model, name: string) {
+export function useDownload(model: Model, name: string, extra?: () => ValuationExport | undefined) {
   const [busy, setBusy] = useState(false);
   const download = async () => {
     setBusy(true);
     try {
       const { toXlsx } = await import('../engine/excel.ts'); // loaded on demand to keep the page light
-      const buf = await toXlsx(model);
+      const buf = await toXlsx(model, extra?.());
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       a.download = `${name.replace(/\W+/g, '_')}_model.xlsx`;

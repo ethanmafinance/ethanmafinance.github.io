@@ -3,41 +3,56 @@
 // for the last fiscal year; P/E uses net income including non-controlling interests (us-gaap ProfitLoss when tagged).
 import { debtOf, type Company } from './dcf.ts';
 
-// Curated by business model for the infrastructure names and the largest companies covered, where the SEC industry code
-// gives the wrong peers (Shell's code 1311 matches US shale producers; Apple's 3571 matches PC makers). Each group has at
-// least 4 covered members, so every member has 3 or more peers. Everyone else is matched on the industry code.
+// Curated by business model for the infrastructure names and the largest companies covered, where the industry label
+// gives the wrong peers (Shell's SEC code 1311 matches US shale producers; Yahoo puts Uber with Salesforce, Spotify with
+// Baidu, Honeywell with small holding companies). Each group has at least 4 covered members, so every member has 3 or
+// more peers; checked against the live comps file on 2026-11-25. Everyone else is matched on industry (pickPeers).
 export const GROUPS: Record<string, string[]> = {
   'Regulated utilities': ['AEP', 'AWK', 'D', 'DUK', 'ED', 'EMA', 'EXC', 'FTS', 'NEE', 'SO', 'SRE', 'XEL'],
   'Pipelines and midstream': ['ENB', 'EPD', 'KMI', 'LNG', 'MPLX', 'OKE', 'PBA', 'TRGP', 'TRP', 'WMB'],
+  'Renewable power': ['AES', 'BEPC', 'CWEN', 'ENLT', 'ORA', 'XIFR'],
   'Towers and data centres': ['AMT', 'CCI', 'DLR', 'EQIX', 'SBAC'],
   'Railways': ['CNI', 'CP', 'CSX', 'NSC', 'UNP'],
   'Waste': ['CWST', 'GFL', 'RSG', 'WCN', 'WM'],
   'Megacap technology': ['AAPL', 'AMZN', 'GOOGL', 'META', 'MSFT'],
-  'Semiconductors': ['ADI', 'AMD', 'ARM', 'AVGO', 'INTC', 'MCHP', 'MRVL', 'MU', 'NVDA', 'NXPI', 'ON', 'QCOM', 'TXN'],
+  'Semiconductors': ['ADI', 'AMD', 'ARM', 'AVGO', 'INTC', 'MCHP', 'MRVL', 'NVDA', 'NXPI', 'ON', 'QCOM', 'TXN'],
+  'Memory and storage': ['MU', 'SNDK', 'STX', 'WDC'],
+  'Computer hardware': ['DELL', 'HPQ', 'NTAP', 'SMCI'],
   'Semiconductor equipment': ['AMAT', 'ASML', 'KLAC', 'LRCX', 'TER'],
   'Enterprise software': ['ADBE', 'ADSK', 'CDNS', 'CRM', 'DDOG', 'INTU', 'NOW', 'ORCL', 'PLTR', 'SAP', 'SNOW', 'SNPS', 'TEAM', 'WDAY'],
   'Security and network software': ['CRWD', 'FTNT', 'NET', 'OKTA', 'PANW', 'ZS'],
   'Networking equipment': ['ANET', 'CIEN', 'CSCO', 'HPE'],
+  'E-commerce software': ['CMRC', 'GDDY', 'SHOP', 'WIX'],
+  'Ad tech': ['APP', 'CRTO', 'DV', 'MGNI', 'PUBM', 'TTD'],
+  'Ride-hailing and delivery': ['CART', 'DASH', 'GRAB', 'LYFT', 'UBER'],
+  'Streaming and entertainment': ['DIS', 'NFLX', 'SIRI', 'SPOT'],
   'IT services': ['ACN', 'CTSH', 'EPAM', 'IBM', 'IT'],
-  'Payment networks': ['FIS', 'GPN', 'MA', 'PYPL', 'V'],
+  'Payments': ['AFRM', 'CPAY', 'FIS', 'FISV', 'FOUR', 'GPN', 'MA', 'PYPL', 'V', 'XYZ'],
+  'Healthcare software and data': ['CERT', 'DOCS', 'GDRX', 'HQY', 'VEEV', 'WAY'],
   'Pharmaceuticals': ['ABBV', 'AMGN', 'AZN', 'BMY', 'GILD', 'JNJ', 'LLY', 'MRK', 'NVO', 'PFE', 'REGN', 'VRTX'],
   'Medical devices': ['ABT', 'BDX', 'BSX', 'EW', 'ISRG', 'MDT', 'SYK'],
   'Life science tools': ['A', 'DHR', 'IQV', 'MTD', 'TMO', 'WAT'],
   'Beverages': ['BUD', 'KDP', 'KO', 'MNST', 'PEP', 'STZ'],
   'Household products': ['CHD', 'CL', 'CLX', 'KMB', 'PG', 'UL'],
+  'Packaged food': ['CAG', 'CPB', 'GIS', 'HRL', 'HSY', 'KHC', 'MDLZ', 'MKC', 'SJM'],
   'Tobacco': ['BTI', 'MO', 'PM', 'TPB'],
   'Big-box retail': ['BJ', 'COST', 'DG', 'DLTR', 'TGT', 'WMT'],
   'Restaurants': ['CMG', 'DRI', 'MCD', 'QSR', 'SBUX', 'YUM'],
+  'Cruise lines': ['CCL', 'NCLH', 'RCL', 'VIK'],
   'Travel and lodging': ['ABNB', 'BKNG', 'EXPE', 'HLT', 'MAR'],
   'Integrated oil and gas': ['BP', 'CVE', 'CVX', 'E', 'EQNR', 'IMO', 'SHEL', 'SU', 'TTE'],
   'Oil and gas producers': ['CNQ', 'COP', 'DVN', 'EOG', 'FANG', 'OVV', 'OXY'],
   'Refining': ['DK', 'MPC', 'PBF', 'PSX', 'VLO'],
   'Mining': ['BHP', 'FCX', 'NEM', 'RIO', 'SCCO', 'TECK'],
-  'Bitcoin miners and AI data centre hosts': ['APLD', 'CIFR', 'CLSK', 'CORZ', 'HUT', 'IREN', 'MARA', 'RIOT', 'WULF'],
-  'Telecom carriers': ['CHTR', 'CMCSA', 'RCI', 'T', 'TMUS', 'TU', 'VZ'],
+  'AI cloud and data centre hosts': ['APLD', 'CIFR', 'CORZ', 'CRWV', 'IREN', 'NBIS', 'WULF'],
+  'Bitcoin miners': ['ABTC', 'BTBT', 'CLSK', 'HIVE', 'HUT', 'MARA', 'RIOT'],
+  'Telecom carriers': ['BCE', 'CHTR', 'CMCSA', 'RCI', 'T', 'TMUS', 'TU', 'VZ'],
   'Aerospace and defence': ['BA', 'GD', 'GE', 'HWM', 'LMT', 'NOC', 'RTX', 'TDG'],
-  'Machinery': ['CAT', 'CMI', 'DE', 'PCAR'],
+  'Machinery': ['CAT', 'CMI', 'DE', 'PCAR', 'WAB'],
+  'Diversified industrials': ['AME', 'DOV', 'HON', 'ITW', 'MMM', 'PH'],
   'Electrical and grid equipment': ['EMR', 'ETN', 'GEV', 'HUBB', 'PWR', 'ROK', 'VRT'],
+  'Uniform and facility services': ['ABM', 'ARMK', 'CTAS', 'UNF', 'VSTS'],
+  'Information services': ['BR', 'EFX', 'FDS', 'RELX', 'TRI', 'TRU', 'VRSK'],
   'Exchanges and data': ['CBOE', 'CME', 'ICE', 'MCO', 'MSCI', 'NDAQ', 'SPGI'],
 };
 export const groupOf = (t: string) => Object.entries(GROUPS).find(([, ts]) => ts.includes(t))?.[0];
@@ -74,7 +89,7 @@ export function impliedPerShare(c: Company, multiple: number) {
 }
 
 // Peers from the comps file (public/data/eq/comps.json, one row per covered company).
-export type Row = { ticker: string; sic: string; currency: string; mcap: number; ev: number; rev: number | null; ebitda: number | null; ni: number | null; fy: string; beta?: number | null;
+export type Row = { ticker: string; sic: string; ind?: string; currency: string; mcap: number; ev: number; rev: number | null; ebitda: number | null; ni: number | null; fy: string; beta?: number | null;
   rev_f?: number | null; ni_f?: number | null };
 
 // Next twelve months (NTM) revenue and earnings from analyst consensus: fiscal years 1 and 2 weighted by the share of year 1
@@ -100,19 +115,34 @@ export const multiples = (r: Row) => ({
   evRevF: r.rev_f && r.rev_f > 0 ? ok(r.ev / r.rev_f) : undefined,
 });
 
-// The site's curated group if there is one; otherwise companies with the same SIC industry code (4, then 3, then 2 digits)
-// until at least 5 qualify, keeping the 10 closest in market value.
+// Peers, in order of preference:
+// 1. the site's curated group, where the industry label alone gives the wrong peers;
+// 2. companies in the same Yahoo Finance industry (about 140 industries, finer than the SEC code: Doximity is
+//    "Health Information Services" with Veeva, not SEC code 7371 with quantum computing start-ups), the 10 closest in
+//    size and profitability: distance = |ln(market cap ratio)| + 10 x |EBITDA margin difference|, so a 10pt margin gap
+//    counts like a 2.7x size gap (multiples follow margins more than size);
+// 3. the same 4-digit SEC industry code, when Yahoo has no industry for the company.
+// Fewer than 3 matches: no peers. A short list of relevant companies beats a full list of unrelated ones, so the code
+// is never widened to 3 or 2 digits.
+const MIN_PEERS = 3;
+const marginOf = (r: Row) => (r.rev && r.rev > 0 && r.ebitda != null ? Math.min(1, Math.max(-1, r.ebitda / r.rev)) : undefined);
 export function pickPeers(self: Row, rows: Row[], n = 10): { peers: Row[]; basis: string } {
   const group = groupOf(self.ticker);
-  if (group) return { peers: rows.filter(r => GROUPS[group].includes(r.ticker) && r.ticker !== self.ticker), basis: `the site's ${group[0].toLowerCase() + group.slice(1)} group` };
-  if (!self.sic) return { peers: [], basis: 'no industry code in the SEC data' };
-  for (const d of [4, 3, 2]) {
-    const code = self.sic.slice(0, d);
-    const c = rows.filter(r => r.ticker !== self.ticker && r.sic?.startsWith(code) && r.mcap > 0 && r.ev > 0);
-    if (c.length >= 5 || d === 2) {
-      const dist = (r: Row) => Math.abs(Math.log(r.mcap / Math.max(self.mcap, 1)));
-      return { peers: c.sort((a, b) => dist(a) - dist(b)).slice(0, n), basis: `SEC industry code ${code}${d < 4 ? ` (first ${d} digits of ${self.sic})` : ''}, the ${Math.min(n, c.length)} closest in market value` };
-    }
+  if (group) {
+    const peers = rows.filter(r => GROUPS[group].includes(r.ticker) && r.ticker !== self.ticker);
+    if (peers.length >= MIN_PEERS) return { peers, basis: `the site's ${group[0].toLowerCase() + group.slice(1)} group` };
   }
-  return { peers: [], basis: '' };
+  const live = (r: Row) => r.ticker !== self.ticker && r.mcap > 0 && r.ev > 0;
+  const m0 = marginOf(self);
+  const dist = (r: Row) => { const m = marginOf(r); return Math.abs(Math.log(r.mcap / Math.max(self.mcap, 1))) + (m0 === undefined || m === undefined ? 5 : 10 * Math.abs(m - m0)); };
+  const closest = (c: Row[]) => [...c].sort((a, b) => dist(a) - dist(b)).slice(0, n);
+  if (self.ind) {
+    const c = rows.filter(r => live(r) && r.ind === self.ind);
+    if (c.length >= MIN_PEERS) return { peers: closest(c), basis: `Yahoo Finance industry "${self.ind}", the ${Math.min(n, c.length)} closest in market value and EBITDA margin${c.length > n ? ` of ${c.length}` : ''}` };
+    return { peers: [], basis: `only ${c.length} other covered ${c.length === 1 ? 'company is' : 'companies are'} in its Yahoo Finance industry ("${self.ind}"), fewer than the 3 needed` };
+  }
+  if (!self.sic) return { peers: [], basis: 'no industry in the Yahoo Finance or SEC data' };
+  const c = rows.filter(r => live(r) && r.sic === self.sic);
+  if (c.length >= MIN_PEERS) return { peers: closest(c), basis: `SEC industry code ${self.sic} (no Yahoo Finance industry), the ${Math.min(n, c.length)} closest in market value and EBITDA margin` };
+  return { peers: [], basis: `fewer than 3 covered companies share its SEC industry code ${self.sic}, and Yahoo Finance gives no industry` };
 }

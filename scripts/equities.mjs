@@ -145,7 +145,7 @@ async function consensus(symbols) {
     if (!cookie || !crumb || crumb.length > 20) throw new Error('no Yahoo session');
     const one = async s => {
       for (let i = 1; i <= 3; i++) {
-        const res = await fetch(`https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(s)}?modules=earningsTrend,defaultKeyStatistics&crumb=${encodeURIComponent(crumb)}`, { headers: { 'User-Agent': BROWSER, Cookie: cookie }, signal: AbortSignal.timeout(20000) }).catch(() => null);
+        const res = await fetch(`https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(s)}?modules=earningsTrend,defaultKeyStatistics,assetProfile&crumb=${encodeURIComponent(crumb)}`, { headers: { 'User-Agent': BROWSER, Cookie: cookie }, signal: AbortSignal.timeout(20000) }).catch(() => null);
         if (res?.status === 404) return { date: today, rows: [] }; // Yahoo has no such symbol: no consensus
         if (res?.ok) {
           const q = (await res.json()).quoteSummary?.result?.[0];
@@ -154,7 +154,9 @@ async function consensus(symbols) {
           // Share counts and the last split, a third count for priced() to check the filing's against.
           const k = q?.defaultKeyStatistics ?? {}, [a, b] = String(k.lastSplitFactor ?? '').split(':').map(Number);
           const sh = { out: raw(k.sharesOutstanding), implied: raw(k.impliedSharesOutstanding), ...(a > 0 && b > 0 && raw(k.lastSplitDate) ? { split: a / b, splitDate: new Date(raw(k.lastSplitDate) * 1000).toISOString().slice(0, 10) } : {}) };
-          return { date: today, sh, rows: tr.filter(x => ['0y', '+1y'].includes(x.period)).map(x => ({ end: x.endDate,
+          // Industry and sector from the company profile: the peer screen (comps.ts pickPeers) matches on the industry.
+          const pr = q?.assetProfile ?? {};
+          return { date: today, sh, ...(pr.industry ? { ind: [pr.industry, pr.sector ?? ''] } : {}), rows: tr.filter(x => ['0y', '+1y'].includes(x.period)).map(x => ({ end: x.endDate,
             rev: raw(x.revenueEstimate?.avg), revAgo: raw(x.revenueEstimate?.yearAgoRevenue), nRev: raw(x.revenueEstimate?.numberOfAnalysts), revCur: x.revenueEstimate?.revenueCurrency ?? null,
             eps: raw(x.earningsEstimate?.avg), nEps: raw(x.earningsEstimate?.numberOfAnalysts), epsCur: x.earningsEstimate?.earningsCurrency ?? null })) };
         }
@@ -246,6 +248,22 @@ async function rates() {
     USD: { value: +row.split(',')[col] / 100, date: `${y}-${m}-${d}`, title: 'US Treasury daily par yield curve, 10-year', url: 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/TextView?type=daily_treasury_yield_curve' },
     CAD: { value: +o['BD.CDN.10YR.DQ.YLD'].v / 100, date: o.d, title: 'Bank of Canada, Government of Canada 10-year benchmark bond yield', url: 'https://www.bankofcanada.ca/rates/interest-rates/canadian-bonds/' },
   };
+}
+
+// Equity risk premium: Damodaran's monthly implied ERP for the S&P 500 (trailing 12 months, adjusted payout), read from
+// his home page ("Implied ERP on November 1, 2026 = 4.41% ..."). If the page or its wording changes, the last value
+// checked by hand is used, so the DCF never runs without a dated, sourced ERP.
+const ERP_URL = 'https://pages.stern.nyu.edu/~adamodar/New_Home_Page/home.htm';
+const ERP_KNOWN = { value: 0.0441, date: '2026-11-01', title: 'Damodaran, implied equity risk premium for the S&P 500 (trailing 12 months, adjusted payout), November 1, 2026', url: ERP_URL };
+async function erpOf() {
+  try {
+    const html = await (await fetch(ERP_URL, { signal: AbortSignal.timeout(20000) })).text();
+    const m = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').match(/Implied ERP on ([A-Z][a-z]+ \d{1,2}, \d{4})\s*=\s*([\d.]+)\s*%/);
+    const v = m && +m[2] / 100, date = m && new Date(`${m[1]} UTC`).toISOString().slice(0, 10);
+    if (v > 0.02 && v < 0.1 && date >= ERP_KNOWN.date) return { value: v, date, title: `Damodaran, implied equity risk premium for the S&P 500 (trailing 12 months, adjusted payout), ${m[1]}`, url: ERP_URL };
+    console.log(`ERP not read from the page (${m ? m[0] : 'no match'}); using ${ERP_KNOWN.value}`);
+  } catch (e) { console.log(`ERP page failed (${e.message}); using ${ERP_KNOWN.value}`); }
+  return ERP_KNOWN;
 }
 
 // Step 1 (no prices): everything from the filings. Returns the record and the Yahoo symbol to price it on.
@@ -441,10 +459,19 @@ for (const t of list) {
 const px = await spark([...new Set([...built.flatMap(b => [b.sym, b.us]), ...built.filter(b => b.rec.currency !== 'USD').map(b => `${b.rec.currency}USD=X`), '^GSPC', '^GSPTSE'])]);
 const cons = await consensus([...new Set(built.map(b => (px[b.sym] ? b.sym : b.us)))]);
 await writeFile(new URL('consensus.json', OUT), JSON.stringify({ source: 'Yahoo Finance earningsTrend', bySymbol: cons }));
+// Industry by ticker (Yahoo Finance company profile). Industries rarely change, so a company Yahoo did not answer for
+// today keeps the saved one, and the committed industry.json is the fallback when Yahoo is down.
+let indMap = {};
+try { indMap = JSON.parse(await readFile(new URL('industry.json', OUT), 'utf8')).byTicker; } catch {}
+for (const b of built) { const c = cons[px[b.sym] ? b.sym : b.us]; if (c?.ind) indMap[b.rec.ticker] = c.ind; }
+await writeFile(new URL('industry.json', OUT), JSON.stringify({ source: 'Yahoo Finance company profile (assetProfile): industry and sector', date: today, byTicker: indMap }));
+const erp = await erpOf();
 const index = [];
 for (const b of built) {
   try {
     const d = priced(b, px, rf, listing, cons);
+    d.erp = erp;
+    if (indMap[d.ticker]) d.industry = { name: indMap[d.ticker][0], sector: indMap[d.ticker][1], source: 'Yahoo Finance company profile', url: `https://finance.yahoo.com/quote/${encodeURIComponent(d.price.symbol)}/profile/` };
     await writeFile(new URL(`${d.ticker}.json`, OUT), JSON.stringify(d));
     index.push({ ticker: d.ticker, name: d.name, currency: d.currency, ...(UNIVERSE.includes(d.ticker) ? { f: 1 } : {}) });
     if (!all) console.log(`ok   ${d.ticker} ${d.currency} ${d.fyEnds.at(-1)} price ${d.price.v} beta ${d.beta.value}`);
@@ -480,9 +507,9 @@ for (const t of merged.map(i => i.ticker)) {
   const r = n => (n == null || !Number.isFinite(n) ? null : +n.toFixed(1));
   // Next twelve months from consensus (comps.ts forward()).
   const { rev_f: revF, ni_f: niF } = forward(d, lastV(d.hist.rev), d.shares.v);
-  compRows.push([t, d.sic ?? '', d.currency, r(mcap), r(ev), r(lastV(d.hist.rev)), ebit == null || da == null ? null : r(ebit + da), r(lastV(d.hist.ni)), d.fyEnds.at(-1), d.beta.months >= 24 ? d.beta.value : null, r(revF), r(niF)]);
+  compRows.push([t, d.sic ?? '', indMap[t]?.[0] ?? null, d.currency, r(mcap), r(ev), r(lastV(d.hist.rev)), ebit == null || da == null ? null : r(ebit + da), r(lastV(d.hist.ni)), d.fyEnds.at(-1), d.beta.months >= 24 ? d.beta.value : null, r(revF), r(niF)]);
 }
-const compsFile = { fields: ['ticker', 'sic', 'currency', 'mcap', 'ev', 'rev', 'ebitda', 'ni', 'fy', 'beta', 'rev_f', 'ni_f'], rows: compRows };
+const compsFile = { fields: ['ticker', 'sic', 'ind', 'currency', 'mcap', 'ev', 'rev', 'ebitda', 'ni', 'fy', 'beta', 'rev_f', 'ni_f'], rows: compRows };
 await writeFile(new URL('comps.json', OUT), JSON.stringify(compsFile));
 // Bottom-up beta (Damodaran): unlever each peer's regression beta at its own net debt / equity, take the median, relever at the
 // company's net debt / equity. One company's 5-year regression is noisy (a crash or a squeeze can double it); a peer median is not.

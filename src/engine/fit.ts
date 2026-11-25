@@ -32,7 +32,7 @@ export function quantile(a: (number | undefined)[], p: number) {
 // Weights for the implied share price: how much each method counts, set by whether the DCF fits.
 // A method with no value (no peers, negative earnings, a negative result) drops out and the rest are scaled to 100%.
 export type Method = 'dcf_g' | 'dcf_x' | 'ev_ebitda' | 'pe' | 'ev_rev' | 'pe_f' | 'ev_rev_f';
-const W: Record<Fit['verdict'], Record<Method, number>> = {
+export const W: Record<Fit['verdict'], Record<Method, number>> = {
   ok: { dcf_g: 0.25, dcf_x: 0.25, ev_ebitda: 0.25, pe: 0.25, ev_rev: 0, pe_f: 0, ev_rev_f: 0 },
   caution: { dcf_g: 0.15, dcf_x: 0.15, ev_ebitda: 0.35, pe: 0.35, ev_rev: 0, pe_f: 0, ev_rev_f: 0 },
   no: { dcf_g: 0, dcf_x: 0, ev_ebitda: 1 / 3, pe: 1 / 3, ev_rev: 1 / 3, pe_f: 0, ev_rev_f: 0 },
